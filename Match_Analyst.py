@@ -27,15 +27,27 @@ def _usage() -> dict:
     return {}
 
 
+for _key in ("GEMINI_API_KEY", "ANTHROPIC_API_KEY"):  # Streamlit Cloud secrets -> environment for agents.py
+    try:
+        if _key in st.secrets and not os.getenv(_key):
+            os.environ[_key] = str(st.secrets[_key])
+    except Exception:  # no secrets file locally
+        pass
+
+
+def _ai_allowed() -> bool:
+    usage, today = _usage(), str(date.today())
+    return usage.get(today, 0) < MAX_REPORTS_PER_DAY
+
+
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
-def analyse(home: str, away: str, kickoff: date, league: str, season: str):
+def analyse(home: str, away: str, kickoff: date, league: str, season: str, use_ai: bool):
+    """use_ai is part of the cache key, so adding an API key or hitting the daily cap gives a fresh report."""
     ctx = build_context(home, away, kickoff, league, season)
-    usage = _usage()
-    today = str(date.today())
-    if usage.get(today, 0) >= MAX_REPORTS_PER_DAY:
-        os.environ.pop("ANTHROPIC_API_KEY", None)  # daily budget used: fall back to the template writer
-    usage[today] = usage.get(today, 0) + 1
-    return ctx, orchestrate(ctx)
+    if use_ai:
+        usage, today = _usage(), str(date.today())
+        usage[today] = usage.get(today, 0) + 1
+    return ctx, orchestrate(ctx, use_ai=use_ai)
 
 
 def upcoming(league: str, season: str, limit: int = 40) -> list[dict]:
@@ -86,7 +98,7 @@ with st.container(border=True):
     else:
         home = c1.selectbox("Home team", team_list, index=_pick(d_home, team_list, 0))
         away = c2.selectbox("Away team", team_list, index=_pick(d_away, team_list, 1))
-        kickoff = c3.date_input("Match date", date.fromisoformat(str(last_played)) + timedelta(days=1))
+        kickoff = c3.date_input("Match date", max(date.today(), date.fromisoformat(str(last_played)) + timedelta(days=1)))
     run = st.button("Analyse match", type="primary", use_container_width=True)
 
 if run:
@@ -94,7 +106,7 @@ if run:
         st.error("Pick two different teams.")
         st.stop()
     with st.spinner("Collecting data, retrieving similar matches, predicting, fact checking..."):
-        ctx, result = analyse(home, away, kickoff, league, season)
+        ctx, result = analyse(home, away, kickoff, league, season, _ai_allowed())
     st.session_state["analysis"] = (ctx, result)
 
 if "analysis" not in st.session_state:

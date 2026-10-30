@@ -2,9 +2,11 @@
 import json
 import os
 import re
+import time
 
 CLAUDE_MODEL = os.getenv("ANALYST_MODEL", "claude-sonnet-5-5")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
+GEMINI_FALLBACK = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-flash-lite-latest")
 
 SYSTEM = """You are a senior football performance analyst writing a pre-match briefing for a coaching staff.
 Use ONLY the facts in the JSON context. Never invent players, injuries, line-ups or numbers.
@@ -39,23 +41,31 @@ class AnalysisAgent:
     def __init__(self):
         self.provider = _provider()
         self.error = None
+        self.model_used = GEMINI_MODEL if self.provider == "gemini" else CLAUDE_MODEL
 
     @property
     def mode(self) -> str:
         if self.error:
             return f"template (AI writer failed: {self.error})"
-        return {"gemini": f"llm:gemini:{GEMINI_MODEL}", "claude": f"llm:claude:{CLAUDE_MODEL}"}.get(
+        return {"gemini": f"llm:gemini:{self.model_used}", "claude": f"llm:claude:{CLAUDE_MODEL}"}.get(
             self.provider, "template (set GEMINI_API_KEY or ANTHROPIC_API_KEY for AI mode)")
 
     def _ask(self, prompt: str) -> str:
         if self.provider == "gemini":
             from google import genai
             from google.genai import types
+            from google.genai import errors
             client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-            resp = client.models.generate_content(
-                model=GEMINI_MODEL, contents=prompt,
-                config=types.GenerateContentConfig(system_instruction=SYSTEM, temperature=0.3, max_output_tokens=3000))
-            return resp.text
+            config = types.GenerateContentConfig(system_instruction=SYSTEM, temperature=0.3, max_output_tokens=3000)
+            for model in (GEMINI_MODEL, GEMINI_FALLBACK):  # the main model is sometimes overloaded (HTTP 503)
+                for attempt in range(2):
+                    try:
+                        resp = client.models.generate_content(model=model, contents=prompt, config=config)
+                        self.model_used = model
+                        return resp.text
+                    except errors.ServerError:
+                        time.sleep(3 * (attempt + 1))
+            raise RuntimeError("Gemini overloaded")
         import anthropic
         msg = anthropic.Anthropic().messages.create(
             model=CLAUDE_MODEL, max_tokens=3000, system=SYSTEM, messages=[{"role": "user", "content": prompt}])
@@ -112,8 +122,10 @@ class ValidationAgent:
         return {"passed": not issues, "issues": sorted(set(issues))}
 
 
-def orchestrate(ctx: dict, max_attempts: int = 3) -> dict:
+def orchestrate(ctx: dict, max_attempts: int = 3, use_ai: bool = True) -> dict:
     analyst, checker = AnalysisAgent(), ValidationAgent()
+    if not use_ai:  # e.g. daily AI budget used up on the public site
+        analyst.provider = None
     feedback = None
     for attempt in range(1, max_attempts + 1):
         report = analyst.run(ctx, feedback)

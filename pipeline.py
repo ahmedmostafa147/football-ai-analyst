@@ -55,6 +55,19 @@ def fetch_epl_season(season: str) -> pd.DataFrame:
     return _standardise(df, "EPL")
 
 
+EPL_FIXTURES = "https://football-data.co.uk/fixtures.csv"  # next round for every league, updated weekly
+
+
+def fetch_epl_fixtures() -> pd.DataFrame:
+    resp = requests.get(EPL_FIXTURES, timeout=30)
+    resp.raise_for_status()
+    df = pd.read_csv(io.StringIO(resp.content.decode("utf-8-sig", errors="replace")))
+    df = df[df.Div == "E0"]
+    dates = pd.to_datetime(df.Date, dayfirst=True)
+    return pd.DataFrame({"league": "EPL", "season": dates.map(_season_of), "date": dates.dt.date,
+                         "home": df.HomeTeam, "away": df.AwayTeam})
+
+
 EGY_RECENT = Path(__file__).with_name("data") / "egypt_results.csv"  # made by fetch_egypt.py
 
 
@@ -164,11 +177,14 @@ def run():
     with eng.begin() as conn:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_matches_teams ON matches (home, away, date)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_matches_league ON matches (league, season, date)"))
-    if EGY_KOOORA.exists():  # upcoming fixtures, so the app can analyse the next matches
+    fixtures = [fetch_epl_fixtures()]  # upcoming fixtures, so the app can analyse the next matches
+    if EGY_KOOORA.exists():
         k = kooora_matches()
-        fixtures = k[k.status == "FIXTURE"].assign(league="EGY")[["league", "season", "date", "kickoff_utc", "home", "away"]]
-        fixtures.to_sql("fixtures", eng, if_exists="replace", index=False)
-        print(f"EGY fixtures: {len(fixtures)} upcoming")
+        fixtures.append(k[k.status == "FIXTURE"].assign(league="EGY")[["league", "season", "date", "home", "away"]])
+    fixtures = pd.concat(fixtures, ignore_index=True)
+    fixtures.to_sql("fixtures", eng, if_exists="replace", index=False)
+    for league, part in fixtures.groupby("league"):
+        print(f"{league} fixtures: {len(part)} upcoming")
     for league, part in df.groupby("league"):
         print(f"{league}: {len(part)} matches ({part.date.min()} -> {part.date.max()})")
     print(f"Saved to {DATABASE_URL}")
