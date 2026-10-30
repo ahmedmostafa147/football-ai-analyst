@@ -102,19 +102,38 @@ def template_report(ctx: dict) -> str:
     h, a = ctx["match"]["home"], ctx["match"]["away"]
     t, f, m = ctx["table"], ctx["form"], ctx["model"]
     hr, ar = ctx["home_record"], ctx["away_record"]
+    iso = lambda s: f"⁨{s}⁩"  # keeps English names and scores intact inside Arabic text
     fav = max(("home", "draw", "away"), key=lambda k: m[f"p_{k}_win" if k != "draw" else "p_draw"])
     fav_en = {"home": f"{h} win", "draw": "a draw", "away": f"{a} win"}[fav]
-    fav_ar = {"home": f"فوز {h}", "draw": "التعادل", "away": f"فوز {a}"}[fav]
+    fav_ar = {"home": f"فوز {iso(h)}", "draw": "التعادل", "away": f"فوز {iso(a)}"}[fav]
+    form_ar = lambda team: " · ".join({"W": "فوز", "D": "تعادل", "L": "خسارة"}[x] for x in f[team]["last_results"])
     hh = ctx["head_to_head"]
+    recent = hh["recent"][:3]
     if hh["meetings"]:
         h2h = (f"{hh['meetings']} meetings: {h} won {hh[f'{h}_wins']}, {hh['draws']} draws, {a} won {hh[f'{a}_wins']}. "
-               f"Latest: " + "; ".join(hh["recent"]))
-        h2h_ar = (f"{hh['meetings']} مواجهة: فاز {h} {hh[f'{h}_wins']}، تعادل {hh['draws']}، فاز {a} {hh[f'{a}_wins']}. "
-                  f"الأحدث: " + "؛ ".join(hh["recent"]))
+               f"Latest: " + "; ".join(recent))
+        h2h_ar = (f"{hh['meetings']} مواجهة: فاز {iso(h)} {hh[f'{h}_wins']}، تعادل {hh['draws']}، فاز {iso(a)} {hh[f'{a}_wins']}. "
+                  f"الأحدث: " + "، ".join(iso(g) for g in recent))
     else:
         h2h, h2h_ar = "no previous meetings in the data", "لا توجد مواجهات سابقة في البيانات"
     pos = lambda team: t[team]["position"] if t[team] else "-"
     pts = lambda team: t[team]["pts"] if t[team] else "-"
+
+    def record_en(r: dict) -> str:
+        parts = [f"{r['scored']} scored and {r['conceded']} conceded per game"]
+        if r.get("shots_on_target") is not None:
+            parts.append(f"{r['shots_on_target']} shots on target")
+        if r.get("xg_for") is not None:
+            parts.append(f"xG {r['xg_for']} for / {r['xg_against']} against")
+        return ", ".join(parts)
+
+    def record_ar(r: dict) -> str:
+        parts = [f"يسجل {r['scored']} ويستقبل {r['conceded']} في المباراة"]
+        if r.get("shots_on_target") is not None:
+            parts.append(f"{r['shots_on_target']} تسديدة على المرمى")
+        if r.get("xg_for") is not None:
+            parts.append(f"أهداف متوقعة {r['xg_for']} له و{r['xg_against']} عليه")
+        return "، ".join(parts)
 
     en = f"""## English
 **{h} vs {a}** — {ctx['match']['date']}
@@ -123,9 +142,9 @@ def template_report(ctx: dict) -> str:
 
 **Form (last 5):** {h} {f[h]['last_results']} ({f[h]['points']} pts) · {a} {f[a]['last_results']} ({f[a]['points']} pts).
 
-**{h} at home:** {hr['scored']} scored and {hr['conceded']} conceded per game, {hr['shots_on_target']} shots on target, xG {hr['xg_for']} for / {hr['xg_against']} against.
+**{h} at home:** {record_en(hr)}.
 
-**{a} away:** {ar['scored']} scored and {ar['conceded']} conceded per game, {ar['shots_on_target']} shots on target, xG {ar['xg_for']} for / {ar['xg_against']} against.
+**{a} away:** {record_en(ar)}.
 
 **Head-to-head:** {h2h}.
 
@@ -134,19 +153,19 @@ def template_report(ctx: dict) -> str:
 **Verdict:** the numbers lean towards {fav_en}.
 """
     ar_txt = f"""## العربية
-**{h} ضد {a}** — {ctx['match']['date']}
+**{iso(h)} ضد {iso(a)}** — {iso(ctx['match']['date'])}
 
-**الترتيب:** {h} في المركز {pos(h)} برصيد {pts(h)} نقطة، و{a} في المركز {pos(a)} برصيد {pts(a)} نقطة.
+**الترتيب:** {iso(h)} في المركز {pos(h)} برصيد {pts(h)} نقطة، و{iso(a)} في المركز {pos(a)} برصيد {pts(a)} نقطة.
 
-**آخر 5 مباريات:** {h} {f[h]['last_results']} ({f[h]['points']} نقطة) · {a} {f[a]['last_results']} ({f[a]['points']} نقطة).
+**آخر 5 مباريات:** {iso(h)}: {form_ar(h)} ({f[h]['points']} نقطة). {iso(a)}: {form_ar(a)} ({f[a]['points']} نقطة).
 
-**{h} على أرضه:** يسجل {hr['scored']} ويستقبل {hr['conceded']} في المباراة، {hr['shots_on_target']} تسديدة على المرمى، xG {hr['xg_for']} له و{hr['xg_against']} عليه.
+**{iso(h)} على أرضه:** {record_ar(hr)}.
 
-**{a} خارج أرضه:** يسجل {ar['scored']} ويستقبل {ar['conceded']} في المباراة، {ar['shots_on_target']} تسديدة على المرمى، xG {ar['xg_for']} له و{ar['xg_against']} عليه.
+**{iso(a)} خارج أرضه:** {record_ar(ar)}.
 
 **المواجهات المباشرة:** {h2h_ar}.
 
-**توقع النموذج:** الأهداف المتوقعة {m['expected_goals_home']} - {m['expected_goals_away']}. فوز {h} {_pct(m['p_home_win'])}، تعادل {_pct(m['p_draw'])}، فوز {a} {_pct(m['p_away_win'])}. النتيجة الأرجح {m['most_likely_score']}.
+**توقع النموذج:** الأهداف المتوقعة {iso(f"{m['expected_goals_home']} - {m['expected_goals_away']}")}. فوز {iso(h)} {iso(_pct(m['p_home_win']))}، تعادل {iso(_pct(m['p_draw']))}، فوز {iso(a)} {iso(_pct(m['p_away_win']))}. النتيجة الأرجح {iso(m['most_likely_score'])}.
 
 **الخلاصة:** الأرقام تميل إلى {fav_ar}.
 """

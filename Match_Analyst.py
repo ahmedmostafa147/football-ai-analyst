@@ -1,11 +1,10 @@
 """Web page: streamlit run Match_Analyst.py"""
-import re
 from datetime import date, timedelta
 
-import pandas as pd
 import streamlit as st
 from sqlalchemy import text
 
+import ui
 from agents import orchestrate
 from pipeline import LEAGUES, engine
 from retrieval import build_context, seasons, teams
@@ -18,69 +17,81 @@ DEFAULTS = {"EPL": (["Arsenal"], ["Liverpool"]),
 def _pick(names: list[str], options: list[str], fallback: int) -> int:
     return next((options.index(n) for n in names if n in options), fallback)
 
-st.set_page_config(page_title="Football AI Match Analyst", page_icon="⚽", layout="wide")
-st.title("⚽ Football AI Match Analyst")
-st.caption("Pre-match analysis from real match data · SQL + RAG + LLM + fact checking")
 
-l1, l2 = st.columns([3, 1])
-league = l1.radio("League", list(LEAGUES), format_func=LEAGUES.get, horizontal=True)
-season_list = seasons(league)
-season = l2.selectbox("Season", season_list[::-1], format_func=lambda s: f"20{s[:2]}/{s[2:]}")
+ui.setup("Match Analyst", "⚽")
+
 with engine().connect() as c:
-    n_matches = c.execute(text("SELECT COUNT(*) FROM matches WHERE league = :l"), {"l": league}).scalar()
-st.caption(f"{n_matches:,} matches in the database · seasons 20{season_list[0][:2]} → 20{season_list[-1][2:]}")
+    counts = dict(c.execute(text("SELECT league, COUNT(*) FROM matches GROUP BY league")).all())
+ui.hero("Pre-match intelligence", "Match Analyst",
+        "Pick a fixture. The system pulls the facts with SQL, retrieves similar past matches, "
+        "predicts the outcome and writes a fact-checked report in English and Arabic.",
+        [f"{n:,} {LEAGUES[l]} matches" for l, n in counts.items()] + ["SQL · RAG · LLM · fact checking"])
 
-team_list = teams(league, season)
-with engine().connect() as c:
-    last_played = c.execute(text("SELECT MAX(date) FROM matches WHERE league = :l AND season = :s"),
-                            {"l": league, "s": season}).scalar()
-d_home, d_away = DEFAULTS[league]
-c1, c2, c3 = st.columns([2, 2, 1])
-home = c1.selectbox("Home team", team_list, index=_pick(d_home, team_list, 0))
-away = c2.selectbox("Away team", team_list, index=_pick(d_away, team_list, 1))
-kickoff = c3.date_input("Match date", date.fromisoformat(str(last_played)) + timedelta(days=1))
+with st.container(border=True):
+    l1, l2 = st.columns([3, 1])
+    league = l1.segmented_control("League", list(LEAGUES), format_func=LEAGUES.get, default="EGY") or "EGY"
+    season_list = seasons(league)
+    season = l2.selectbox("Season", season_list[::-1], format_func=lambda s: f"20{s[:2]}/{s[2:]}")
+    team_list = teams(league, season)
+    with engine().connect() as c:
+        last_played = c.execute(text("SELECT MAX(date) FROM matches WHERE league = :l AND season = :s"),
+                                {"l": league, "s": season}).scalar()
+    d_home, d_away = DEFAULTS[league]
+    c1, c2, c3 = st.columns([2, 2, 1])
+    home = c1.selectbox("Home team", team_list, index=_pick(d_home, team_list, 0))
+    away = c2.selectbox("Away team", team_list, index=_pick(d_away, team_list, 1))
+    kickoff = c3.date_input("Match date", date.fromisoformat(str(last_played)) + timedelta(days=1))
+    run = st.button("Analyse match", type="primary", use_container_width=True)
 
-if st.button("Analyse match", type="primary", use_container_width=True):
+if run:
     if home == away:
         st.error("Pick two different teams.")
         st.stop()
-    with st.spinner("Collecting data, analysing, fact checking..."):
+    with st.spinner("Collecting data, retrieving similar matches, predicting, fact checking..."):
         ctx = build_context(home, away, kickoff, league, season)
         result = orchestrate(ctx)
+    st.session_state["analysis"] = (ctx, result)
 
-    m = ctx["model"]
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric(f"{home} win", f"{m['p_home_win'] * 100:.1f}%")
-    k2.metric("Draw", f"{m['p_draw'] * 100:.1f}%")
-    k3.metric(f"{away} win", f"{m['p_away_win'] * 100:.1f}%")
-    k4.metric("Most likely score", m["most_likely_score"])
+if "analysis" not in st.session_state:
+    st.stop()
 
-    left, right = st.columns(2)
-    for col, team in ((left, home), (right, away)):
-        f, t = ctx["form"][team], ctx["table"][team]
-        col.subheader(team)
-        col.write(f"**Position:** {t['position'] if t else '-'} · **Points:** {t['pts'] if t else '-'} · **Form:** {f['last_results']}")
-        col.dataframe(pd.DataFrame({"Last 5 matches": f["games"]}), hide_index=True, use_container_width=True)
+ctx, result = st.session_state["analysis"]
+home, away = ctx["match"]["home"], ctx["match"]["away"]
+st.write("")
+ui.html_block(ui.matchup(home, away, ctx["model"], ctx["match"]["date"]))
+st.write("")
 
-    hh = ctx["head_to_head"]
-    if hh["meetings"]:
-        st.write(f"**Head-to-head ({hh['meetings']} meetings):** {home} {hh[f'{home}_wins']} wins · "
-                 f"{hh['draws']} draws · {away} {hh[f'{away}_wins']} wins")
+left, right = st.columns(2)
+left.markdown(ui.team_card(home, ui.C["home"], ctx["table"][home], ctx["form"][home], ctx["home_record"], "Home"),
+              unsafe_allow_html=True)
+right.markdown(ui.team_card(away, ui.C["away"], ctx["table"][away], ctx["form"][away], ctx["away_record"], "Away"),
+               unsafe_allow_html=True)
+st.write("")
 
-    v = result["validation"]
-    if v["passed"]:
-        st.success(f"Fact check passed · writer: {result['mode']}")
-    else:
-        st.warning(f"Fact check issues: {', '.join(v['issues'])}")
+hh = ctx["head_to_head"]
+if hh["meetings"]:
+    total = hh["meetings"]
+    seg = lambda n, color: f'<div style="width:{100 * n / total}%;background:{color}"></div>'
+    recent = "".join(f'<div><span class="d">{ui.e(g[:10])}</span>{ui.e(g[11:])}</div>' for g in hh["recent"])
+    ui.html_block(f"""
+<div class="card"><h4>Head-to-head · {total} meetings</h4>
+  <div class="bar">{seg(hh[f'{home}_wins'], ui.C['home'])}{seg(hh['draws'], ui.C['draw'])}{seg(hh[f'{away}_wins'], ui.C['away'])}</div>
+  <div class="legend"><div>{ui.e(home)}<b>{hh[f'{home}_wins']}</b></div><div style="text-align:center">Draws<b>{hh['draws']}</b></div>
+  <div style="text-align:right">{ui.e(away)}<b>{hh[f'{away}_wins']}</b></div></div>
+  <h4 style="margin-top:16px">Most recent</h4><div class="games">{recent}</div>
+</div>""")
+    st.write("")
 
-    english, arabic = result["report"].split("## العربية")
-    tab_en, tab_ar = st.tabs(["English report", "التقرير بالعربي"])
-    tab_en.markdown(english.replace("## English", ""))
-    paragraphs = "".join(
-        f"<p>{re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', p.strip())}</p>" for p in arabic.split("\n\n") if p.strip()
-    )
-    tab_ar.markdown(f"<div dir='rtl' style='text-align:right'>{paragraphs}</div>", unsafe_allow_html=True)
+v = result["validation"]
+writer = "Claude" if result["mode"].startswith("llm") else "template writer (add ANTHROPIC_API_KEY for Claude)"
+ui.html_block(f'<div class="check {"" if v["passed"] else "bad"}">'
+              f'{"✓ Every number in the report was checked against the data" if v["passed"] else "⚠ " + ui.e(", ".join(v["issues"]))}'
+              f' · written by {ui.e(writer)}</div>')
+st.write("")
 
-    with st.expander("Retrieved documents (RAG)"):
-        for d in ctx["retrieved_documents"]:
-            st.write("• " + d)
+english, arabic = result["report"].split("## العربية")
+tab_ar, tab_en, tab_rag = st.tabs(["التقرير بالعربي", "English report", "Retrieved matches (RAG)"])
+tab_ar.markdown(ui.report_html(arabic, rtl=True), unsafe_allow_html=True)
+tab_en.markdown(ui.report_html(english.replace("## English", "")), unsafe_allow_html=True)
+tab_rag.markdown('<div class="card games">' + "".join(f"<div>{ui.e(d)}</div>" for d in ctx["retrieved_documents"]) + "</div>",
+                 unsafe_allow_html=True)

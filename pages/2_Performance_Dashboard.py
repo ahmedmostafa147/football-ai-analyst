@@ -5,11 +5,10 @@ import plotly.graph_objects as go
 import streamlit as st
 from sqlalchemy import text
 
+import ui
 from pipeline import engine
 
-st.set_page_config(page_title="Performance Dashboard", page_icon="📊", layout="wide")
-st.title("📊 Football Performance Dashboard")
-st.caption("Team and player performance from StatsBomb open event data · every pass, shot and tackle")
+ui.setup("Performance Dashboard", "📊")
 
 MIN_MINUTES = 180
 TEAM_METRICS = {  # column: (label, higher is better)
@@ -68,60 +67,88 @@ if data is None:
     st.stop()
 teams, players, matches = data
 
-competition = st.radio("Tournament", sorted(teams.competition.unique()), horizontal=True)
+ui.hero("Performance analysis", "Performance Dashboard",
+        "Team and player performance from StatsBomb event data: every pass, shot, dribble and tackle.",
+        [f"{len(matches)} matches", f"{players.player.nunique():,} players", "AFCON 2023 · World Cup 2022 · Euro 2024"])
+
+competition = st.segmented_control("Tournament", sorted(teams.competition.unique()), default="AFCON 2023") or "AFCON 2023"
 t_comp, p_comp = teams[teams.competition == competition], players[players.competition == competition]
 p_qual = p_comp[p_comp.minutes >= MIN_MINUTES]
 team_avg = t_comp.groupby("team")[list(TEAM_METRICS)].mean()
 league_avg = team_avg.mean()
+team_names = sorted(t_comp.team.unique())
+default_team = next((t for t in ("Egypt", "Morocco", "Saudi Arabia") if t in team_names), team_names[0])
 
 tab_team, tab_leaders, tab_compare, tab_sw = st.tabs(
     ["Team analysis", "Player leaders", "Player comparison", "Strengths & weaknesses"])
 
 # ---------- Team analysis ----------
 with tab_team:
-    team_names = sorted(t_comp.team.unique())
-    default = next((t for t in ("Egypt", "Morocco", "Saudi Arabia") if t in team_names), team_names[0])
-    team = st.selectbox("Team", team_names, index=team_names.index(default))
+    team = st.selectbox("Team", team_names, index=team_names.index(default_team))
     games = t_comp[t_comp.team == team].merge(matches[["match_id", "date", "stage"]], on="match_id").sort_values("date")
-    k = st.columns(5)
-    for col, (metric, fmt) in zip(k, [("goals", "{:.2f}"), ("xg", "{:.2f}"), ("shots", "{:.1f}"),
-                                      ("possession", "{:.0f}%"), ("pass_pct", "{:.0f}%")]):
-        value, avg = team_avg.loc[team, metric], league_avg[metric]
-        col.metric(f"{TEAM_METRICS[metric][0]} / match", fmt.format(value), f"{value - avg:+.2f} vs avg")
+    row = team_avg.loc[team]
+    ui.tiles([
+        ui.tile("Goals per match", f"{row.goals:.2f}", row.goals - league_avg.goals),
+        ui.tile("xG per match", f"{row.xg:.2f}", row.xg - league_avg.xg),
+        ui.tile("Shots per match", f"{row.shots:.1f}", row.shots - league_avg.shots),
+        ui.tile("Possession", f"{row.possession:.0f}%", row.possession - league_avg.possession),
+        ui.tile("Goals conceded", f"{row.goals_against:.2f}", row.goals_against - league_avg.goals_against, good_when_up=False),
+    ])
+    st.write("")
+    c1, c2 = st.columns(2)
+    keys = ["goals", "xg", "shots_on_target", "key_passes"]
+    fig = go.Figure([
+        go.Bar(name=team, x=[TEAM_METRICS[k][0] for k in keys], y=row[keys], marker_color=ui.C["accent"]),
+        go.Bar(name="Tournament average", x=[TEAM_METRICS[k][0] for k in keys], y=league_avg[keys], marker_color=ui.C["border"]),
+    ])
+    fig.update_layout(barmode="group", title="Attack per match vs tournament average", height=360)
+    c1.plotly_chart(fig, use_container_width=True)
 
-    compare = pd.DataFrame({"metric": [TEAM_METRICS[m][0] for m in ["goals", "xg", "shots", "shots_on_target", "key_passes"]] * 2,
-                            "value": list(team_avg.loc[team, ["goals", "xg", "shots", "shots_on_target", "key_passes"]])
-                            + list(league_avg[["goals", "xg", "shots", "shots_on_target", "key_passes"]]),
-                            "who": [team] * 5 + ["Tournament average"] * 5})
-    st.plotly_chart(px.bar(compare, x="metric", y="value", color="who", barmode="group",
-                           title=f"{team} attack per match vs tournament average"), use_container_width=True)
+    label = games.opponent.str.slice(0, 14)
+    fig = go.Figure([
+        go.Bar(name="xG created", x=label, y=games.xg, marker_color=ui.C["accent"]),
+        go.Bar(name="xG conceded", x=label, y=games.xg_against, marker_color=ui.C["loss"]),
+    ])
+    fig.update_layout(barmode="group", title="Chance quality in each match", height=360)
+    c2.plotly_chart(fig, use_container_width=True)
 
-    games["match"] = games.date + " vs " + games.opponent
-    fig = go.Figure([go.Bar(name="xG for", x=games.match, y=games.xg), go.Bar(name="xG against", x=games.match, y=games.xg_against)])
-    fig.update_layout(barmode="group", title="Chance quality in each match (xG)")
-    st.plotly_chart(fig, use_container_width=True)
-    st.dataframe(games[["date", "stage", "opponent", "goals", "goals_against", "xg", "xg_against", "shots",
-                        "possession", "pass_pct"]].round(2), hide_index=True, use_container_width=True)
+    table = games.assign(result=games.goals.astype(int).astype(str) + "–" + games.goals_against.astype(int).astype(str))
+    st.dataframe(
+        table[["date", "stage", "opponent", "result", "xg", "xg_against", "shots", "possession", "pass_pct"]].round(1),
+        hide_index=True, use_container_width=True,
+        column_config={"xg": "xG", "xg_against": "xG against", "pass_pct": "Pass %", "possession": "Possession %"})
 
 # ---------- Player leaders ----------
 with tab_leaders:
     st.caption(f"Per 90 minutes · players with at least {MIN_MINUTES} minutes")
+
+    def short(name: str) -> str:  # "Mohamed Hany Gamal Eldemerdash" -> "Mohamed Eldemerdash"
+        words = name.split()
+        return name if len(name) <= 20 or len(words) < 3 else f"{words[0]} {words[-1]}"
+
+    def leader_chart(metric: str, title: str, color: str):
+        top = p_qual.nlargest(10, metric).sort_values(metric)
+        labels = [f"{short(p)} <span style='color:{ui.C['muted']}'>· {t}</span>" for p, t in zip(top.player, top.team)]
+        fig = go.Figure(go.Bar(x=top[metric], y=labels, orientation="h", marker_color=color,
+                               text=top[metric].round(2), textposition="outside", cliponaxis=False,
+                               hovertext=top.player, hoverinfo="text+x"))
+        fig.update_layout(title=title, height=420, xaxis={"range": [0, top[metric].max() * 1.18], "showgrid": False,
+                                                          "showticklabels": False},
+                          margin={"l": 10, "r": 30, "t": 48, "b": 10})
+        return fig
+
     c1, c2 = st.columns(2)
-    for col, metric, title in ((c1, "key_passes_90", "Best chance creators"), (c2, "shots_90", "Most shots")):
-        top = p_qual.nlargest(10, metric).sort_values(metric)
-        col.plotly_chart(px.bar(top, x=metric, y="player", color="team", orientation="h", title=title,
-                                labels={metric: PLAYER_METRICS[metric], "player": ""}), use_container_width=True)
+    c1.plotly_chart(leader_chart("key_passes_90", "Best chance creators", ui.C["accent"]), use_container_width=True)
+    c2.plotly_chart(leader_chart("shots_90", "Most shots", ui.C["home"]), use_container_width=True)
     c3, c4 = st.columns(2)
-    for col, metric, title in ((c3, "xg_90", "Highest expected goals"), (c4, "tackles_won_90", "Best ball winners")):
-        top = p_qual.nlargest(10, metric).sort_values(metric)
-        col.plotly_chart(px.bar(top, x=metric, y="player", color="team", orientation="h", title=title,
-                                labels={metric: PLAYER_METRICS[metric], "player": ""}), use_container_width=True)
+    c3.plotly_chart(leader_chart("xg_90", "Highest expected goals", ui.C["away"]), use_container_width=True)
+    c4.plotly_chart(leader_chart("tackles_won_90", "Best ball winners", "#B07CFF"), use_container_width=True)
 
 # ---------- Player comparison ----------
 with tab_compare:
-    group = st.selectbox("Position", ["Forward", "Midfielder", "Defender"])
-    pool = p_qual[p_qual.group == group]
-    names = sorted(pool.player)
+    group = st.segmented_control("Position", ["Forward", "Midfielder", "Defender"], default="Forward") or "Forward"
+    pool = p_qual[p_qual.group == group].sort_values("xg_90", ascending=False)
+    names = list(pool.player)
     if len(names) < 2:
         st.info("Not enough players in this position.")
     else:
@@ -131,32 +158,42 @@ with tab_compare:
         metrics = list(PLAYER_METRICS)
         pct = pool.set_index("player")[metrics].rank(pct=True) * 100  # percentile within the same position
         fig = go.Figure()
-        for name in (a, b):
-            fig.add_trace(go.Scatterpolar(r=list(pct.loc[name]) + [pct.loc[name].iloc[0]],
-                                          theta=[PLAYER_METRICS[m] for m in metrics] + [PLAYER_METRICS[metrics[0]]],
-                                          fill="toself", name=name))
-        fig.update_layout(polar={"radialaxis": {"range": [0, 100]}},
+        for name, color in ((a, ui.C["home"]), (b, ui.C["away"])):
+            r = list(pct.loc[name]) + [pct.loc[name].iloc[0]]
+            fig.add_trace(go.Scatterpolar(r=r, theta=[PLAYER_METRICS[m] for m in metrics] + [PLAYER_METRICS[metrics[0]]],
+                                          fill="toself", name=name, line_color=color, opacity=0.75))
+        fig.update_layout(polar={"radialaxis": {"range": [0, 100], "showticklabels": False}}, height=480,
                           title=f"Percentile vs all {group.lower()}s in {competition}")
-        st.plotly_chart(fig, use_container_width=True)
+        left, right = st.columns([3, 2])
+        left.plotly_chart(fig, use_container_width=True)
         table = pool.set_index("player").loc[[a, b], ["team", "minutes", *metrics]]
-        st.dataframe(table.rename(columns=PLAYER_METRICS).round(2).T, use_container_width=True)
+        table.index = [short(a), short(b)]
+        right.dataframe(table.rename(columns=PLAYER_METRICS).round(2).T, use_container_width=True, height=470)
 
 # ---------- Strengths & weaknesses ----------
 with tab_sw:
-    team2 = st.selectbox("Team ", sorted(t_comp.team.unique()), index=sorted(t_comp.team.unique()).index(default))
+    team2 = st.selectbox("Team ", team_names, index=team_names.index(default_team))
     z = (team_avg.loc[team2] - league_avg) / team_avg.std()
     z = pd.Series({m: (v if TEAM_METRICS[m][1] else -v) for m, v in z.items()})  # positive = good
     ranked = z.sort_values()
+
+    def items(metrics, empty: str) -> str:
+        if not len(metrics):
+            return f'<div class="list-item"><span class="x">{empty}</span></div>'
+        return "".join(
+            f'<div class="list-item"><span class="n">{TEAM_METRICS[m][0]}</span>'
+            f'<span class="x">{team_avg.loc[team2, m]:.2f} per match · avg {league_avg[m]:.2f}</span></div>'
+            for m in metrics)
+
+    strengths = ranked[ranked > 0].index[::-1][:3]  # only metrics where the team is better than average
+    weaknesses = ranked[ranked < 0].index[:3]
     c1, c2 = st.columns(2)
-    c1.subheader("✅ Strengths")
-    for m in ranked.index[::-1][:3]:
-        c1.write(f"**{TEAM_METRICS[m][0]}**: {team_avg.loc[team2, m]:.2f} per match (avg {league_avg[m]:.2f})")
-    c2.subheader("⚠️ Weaknesses")
-    for m in ranked.index[:3]:
-        c2.write(f"**{TEAM_METRICS[m][0]}**: {team_avg.loc[team2, m]:.2f} per match (avg {league_avg[m]:.2f})")
-    chart = pd.DataFrame({"metric": [TEAM_METRICS[m][0] for m in ranked.index], "score": ranked.values})
-    chart["side"] = chart.score.map(lambda s: "Strength" if s > 0 else "Weakness")
-    st.plotly_chart(px.bar(chart, x="score", y="metric", color="side", orientation="h",
-                           color_discrete_map={"Strength": "#1D9E75", "Weakness": "#D85A30"},
-                           title=f"{team2} vs tournament average (standard deviations, positive = better)"),
-                    use_container_width=True)
+    c1.markdown(f'<div class="card" style="border-top:3px solid {ui.C["win"]}"><h4>Strengths</h4>'
+                f'{items(strengths, "No metric above the tournament average")}</div>', unsafe_allow_html=True)
+    c2.markdown(f'<div class="card" style="border-top:3px solid {ui.C["loss"]}"><h4>Weaknesses</h4>'
+                f'{items(weaknesses, "No metric below the tournament average")}</div>', unsafe_allow_html=True)
+    st.write("")
+    fig = go.Figure(go.Bar(x=ranked.values, y=[TEAM_METRICS[m][0] for m in ranked.index], orientation="h",
+                           marker_color=[ui.C["win"] if v > 0 else ui.C["loss"] for v in ranked.values]))
+    fig.update_layout(title=f"{team2} vs tournament average (standard deviations, right = better)", height=480)
+    st.plotly_chart(fig, use_container_width=True)
