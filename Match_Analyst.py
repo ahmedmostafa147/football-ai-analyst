@@ -38,6 +38,18 @@ def analyse(home: str, away: str, kickoff: date, league: str, season: str):
     return ctx, orchestrate(ctx)
 
 
+def upcoming(league: str, season: str, limit: int = 40) -> list[dict]:
+    """Next fixtures (Egyptian league, from Kooora); empty when the league has no fixture list."""
+    with engine().connect() as c:
+        try:
+            rows = c.execute(text("SELECT date, home, away FROM fixtures WHERE league = :l AND season = :s "
+                                  "AND date >= :today ORDER BY date LIMIT :n"),
+                             {"l": league, "s": season, "today": str(date.today()), "n": limit})
+            return [dict(r._mapping) for r in rows]
+        except Exception:  # no fixtures table yet
+            return []
+
+
 ui.setup("Match Analyst", "⚽")
 
 with engine().connect() as c:
@@ -57,10 +69,24 @@ with st.container(border=True):
         last_played = c.execute(text("SELECT MAX(date) FROM matches WHERE league = :l AND season = :s"),
                                 {"l": league, "s": season}).scalar()
     d_home, d_away = DEFAULTS[league]
+    fixtures = upcoming(league, season)
+    fixture = None
+    if fixtures:
+        favourite = next((i for i, f in enumerate(fixtures) if set(d_home) & {f["home"], f["away"]}), 0)
+        options = ["Pick teams yourself"] + [f"{f['date']} · {f['home']} vs {f['away']}" for f in fixtures]
+        choice = st.selectbox("Upcoming fixture", range(len(options)), index=favourite + 1,
+                              format_func=options.__getitem__)
+        fixture = fixtures[choice - 1] if choice else None
     c1, c2, c3 = st.columns([2, 2, 1])
-    home = c1.selectbox("Home team", team_list, index=_pick(d_home, team_list, 0))
-    away = c2.selectbox("Away team", team_list, index=_pick(d_away, team_list, 1))
-    kickoff = c3.date_input("Match date", date.fromisoformat(str(last_played)) + timedelta(days=1))
+    if fixture:
+        home, away, kickoff = fixture["home"], fixture["away"], date.fromisoformat(fixture["date"])
+        c1.text_input("Home team", home, disabled=True)
+        c2.text_input("Away team", away, disabled=True)
+        c3.text_input("Match date", str(kickoff), disabled=True)
+    else:
+        home = c1.selectbox("Home team", team_list, index=_pick(d_home, team_list, 0))
+        away = c2.selectbox("Away team", team_list, index=_pick(d_away, team_list, 1))
+        kickoff = c3.date_input("Match date", date.fromisoformat(str(last_played)) + timedelta(days=1))
     run = st.button("Analyse match", type="primary", use_container_width=True)
 
 if run:

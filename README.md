@@ -2,7 +2,7 @@
 
 Pre-match analysis system: real match data → SQL → retrieval (SQL + RAG) → prediction model → LLM analyst → fact-checking agent → bilingual (English / Arabic) report, with a measurable evaluation.
 
-**Leagues:** English Premier League (8,060 matches, 2005 → Oct 2026) and Egyptian Premier League (4,708 matches, 2009 → Oct 2026).
+**Leagues:** English Premier League (8,060 matches, 2005 → Oct 2026) and Egyptian Premier League (4,721 matches, 2009 → Oct 2026, current season and upcoming fixtures from Kooora).
 
 **Performance dashboard:** current-season team analysis, league overview (attack vs defence) and strengths & weaknesses for every team in both leagues.
 
@@ -29,7 +29,8 @@ football-data.co.uk + footballdatabase ─► pipeline.py ─► PostgreSQL / SQ
 
 ```bash
 pip install -r requirements.txt
-python fetch_egypt.py                                 # Egyptian results 2009/10 -> today (~5 min, polite delays)
+python fetch_egypt.py                                 # Egyptian results history 2009/10 -> 2025/26 (~5 min)
+python fetch_kooora.py                                # current Egyptian season + upcoming fixtures (Kooora)
 python pipeline.py                                    # load both leagues into SQL
 streamlit run Match_Analyst.py                        # web app: match analyst + performance dashboard
 python main.py "Arsenal" "Liverpool" --date 2026-11-01

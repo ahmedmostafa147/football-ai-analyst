@@ -58,15 +58,49 @@ def fetch_epl_season(season: str) -> pd.DataFrame:
 EGY_RECENT = Path(__file__).with_name("data") / "egypt_results.csv"  # made by fetch_egypt.py
 
 
+EGY_KOOORA = Path(__file__).with_name("data") / "kooora_egypt.csv"  # made by fetch_kooora.py
+# Kooora (Arabic) -> footballdatabase (English) names, matched on date + score over the 2026/27 season
+KOOORA_NAMES = {
+    "أبو قير للأسمدة": "Abou Qir Fertilizers SC", "الأهلي": "Al Ahly", "الاتحاد": "Al-Ittihad Alexandria",
+    "البنك الأهلي": "National Bank", "الجونة": "El Gounah", "الجيش": "El Geish", "الزمالك": "El Zamalek",
+    "السويس بتروجيت": "Petrojet", "الشرقية إنبي": "ENPPI", "القناة": "Olympic El Qanah FC", "المصري": "Al Masry",
+    "المقاولون العرب": "Al Mokawloon Al Arab", "بترول أسيوط": "Asyut Petroleum", "بيراميدز": "Pyramids FC",
+    "زد": "ZED FC", "سموحة": "Smouha SC", "سيراميكا كليوباترا": "Ceramica Cleopatra",
+    "غزل المحلة": "Ghazl El Mehalla", "مودرن سبورت": "Modern Sport FC", "وادي دجلة": "Wadi Degla FC",
+}
+
+
+def _season_of(d) -> str:
+    y = d.year if d.month >= 7 else d.year - 1
+    return f"{y % 100:02d}{(y + 1) % 100:02d}"
+
+
+def _result(h, a) -> str:
+    return "H" if h > a else "A" if a > h else "D"
+
+
+def kooora_matches() -> pd.DataFrame:
+    """Current Egyptian season from Kooora: results and upcoming fixtures, English team names."""
+    k = pd.read_csv(EGY_KOOORA, parse_dates=["date"])
+    unknown = (set(k.home) | set(k.away)) - set(KOOORA_NAMES)
+    if unknown:
+        raise SystemExit(f"Add these Kooora team names to KOOORA_NAMES: {sorted(unknown)}")
+    k["home"], k["away"] = k.home.map(KOOORA_NAMES), k.away.map(KOOORA_NAMES)
+    k["date"] = k.date.dt.date
+    k["season"] = k.date.map(_season_of)
+    return k
+
+
 def fetch_egypt_recent() -> pd.DataFrame:
-    """2009/10 -> today, from fetch_egypt.py (results and goals only)."""
+    """2009/10 -> today: history from fetch_egypt.py, current season from Kooora (more complete and up to date)."""
     raw = pd.read_csv(EGY_RECENT, parse_dates=["date"])
     first_year = raw.season_slug.str.extract(r"(\d{4})-")[0].astype(int)
-    df = raw.assign(
-        date=raw.date.dt.date,
-        season=first_year.map(lambda y: f"{y % 100:02d}{(y + 1) % 100:02d}"),
-        result=["H" if h > a else "A" if a > h else "D" for h, a in zip(raw.home_goals, raw.away_goals)],
-    )
+    df = raw.assign(date=raw.date.dt.date, season=first_year.map(lambda y: f"{y % 100:02d}{(y + 1) % 100:02d}"))
+    if EGY_KOOORA.exists():
+        k = kooora_matches()
+        played = k[k.status == "RESULT"]
+        df = pd.concat([df[df.date < played.date.min()], played], ignore_index=True)
+    df["result"] = [_result(h, a) for h, a in zip(df.home_goals, df.away_goals)]
     return _standardise(df, "EGY")
 
 
@@ -130,6 +164,11 @@ def run():
     with eng.begin() as conn:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_matches_teams ON matches (home, away, date)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_matches_league ON matches (league, season, date)"))
+    if EGY_KOOORA.exists():  # upcoming fixtures, so the app can analyse the next matches
+        k = kooora_matches()
+        fixtures = k[k.status == "FIXTURE"].assign(league="EGY")[["league", "season", "date", "kickoff_utc", "home", "away"]]
+        fixtures.to_sql("fixtures", eng, if_exists="replace", index=False)
+        print(f"EGY fixtures: {len(fixtures)} upcoming")
     for league, part in df.groupby("league"):
         print(f"{league}: {len(part)} matches ({part.date.min()} -> {part.date.max()})")
     print(f"Saved to {DATABASE_URL}")
