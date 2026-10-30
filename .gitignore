@@ -1,0 +1,6 @@
+football.db
+reports/
+__pycache__/
+.cache/
+data/
+.env

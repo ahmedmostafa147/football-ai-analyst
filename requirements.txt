@@ -1,0 +1,7 @@
+pandas
+requests
+sqlalchemy
+scikit-learn
+anthropic
+streamlit
+kagglehub
