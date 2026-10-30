@@ -1,4 +1,5 @@
 """Web page: streamlit run Match_Analyst.py"""
+import os
 from datetime import date, timedelta
 
 import streamlit as st
@@ -16,6 +17,25 @@ DEFAULTS = {"EPL": (["Arsenal"], ["Liverpool"]),
 
 def _pick(names: list[str], options: list[str], fallback: int) -> int:
     return next((options.index(n) for n in names if n in options), fallback)
+
+
+MAX_REPORTS_PER_DAY = 30  # protects the API key on the public site; repeated fixtures are served from cache
+
+
+@st.cache_resource
+def _usage() -> dict:
+    return {}
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def analyse(home: str, away: str, kickoff: date, league: str, season: str):
+    ctx = build_context(home, away, kickoff, league, season)
+    usage = _usage()
+    today = str(date.today())
+    if usage.get(today, 0) >= MAX_REPORTS_PER_DAY:
+        os.environ.pop("ANTHROPIC_API_KEY", None)  # daily budget used: fall back to the template writer
+    usage[today] = usage.get(today, 0) + 1
+    return ctx, orchestrate(ctx)
 
 
 ui.setup("Match Analyst", "⚽")
@@ -48,8 +68,7 @@ if run:
         st.error("Pick two different teams.")
         st.stop()
     with st.spinner("Collecting data, retrieving similar matches, predicting, fact checking..."):
-        ctx = build_context(home, away, kickoff, league, season)
-        result = orchestrate(ctx)
+        ctx, result = analyse(home, away, kickoff, league, season)
     st.session_state["analysis"] = (ctx, result)
 
 if "analysis" not in st.session_state:
