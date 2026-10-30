@@ -170,7 +170,8 @@ def report_html(markdown: str, rtl: bool = False) -> str:
         text = e(p, quote=False)
         if rtl:  # isolate English names, dates and scores so they don't scramble the Arabic sentence
             text = LATIN_RUN.sub(lambda m: f'<span dir="ltr" style="unicode-bidi:isolate;white-space:nowrap">{m.group(0)}</span>', text)
-        return f"<p>{re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text)}</p>"
+        bold = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+        return f"<p>{bold}</p>"
 
     body = "".join(para(p) for p in paragraphs)
     return f'<div class="card report {"rtl" if rtl else ""}">{body}</div>'

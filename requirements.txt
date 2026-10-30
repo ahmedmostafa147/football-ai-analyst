@@ -4,4 +4,5 @@ sqlalchemy
 scikit-learn
 anthropic
 streamlit
+plotly
 kagglehub
