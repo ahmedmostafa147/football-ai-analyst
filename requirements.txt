@@ -2,7 +2,8 @@ pandas
 requests
 sqlalchemy
 scikit-learn
-anthropic
 streamlit
 plotly
+google-genai
+anthropic
 kagglehub

@@ -102,7 +102,8 @@ if hh["meetings"]:
     st.write("")
 
 v = result["validation"]
-writer = "Claude" if result["mode"].startswith("llm") else "template writer (add ANTHROPIC_API_KEY for Claude)"
+writer = {"llm:gemini": "Gemini", "llm:claude": "Claude"}.get(":".join(result["mode"].split(":")[:2]),
+                                                              "the offline template (no AI key set)")
 ui.html_block(f'<div class="check {"" if v["passed"] else "bad"}">'
               f'{"✓ Every number in the report was checked against the data" if v["passed"] else "⚠ " + ui.e(", ".join(v["issues"]))}'
               f' · written by {ui.e(writer)}</div>')

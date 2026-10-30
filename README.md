@@ -4,7 +4,9 @@ Pre-match analysis system: real match data → SQL → retrieval (SQL + RAG) →
 
 **Leagues:** English Premier League (8,060 matches, 2005 → Oct 2026) and Egyptian Premier League (4,708 matches, 2009 → Oct 2026).
 
-**Performance dashboard:** team analysis, player leaders, player comparison and strengths & weaknesses from StatsBomb open event data (AFCON 2023, World Cup 2022, Euro 2024 — 167 matches, 5,189 player-match rows).
+**Performance dashboard:** current-season team analysis, league overview (attack vs defence) and strengths & weaknesses for every team in both leagues.
+
+**AI writer:** Gemini (`GEMINI_API_KEY`) or Claude (`ANTHROPIC_API_KEY`); without a key an offline template writes the report. Reports are cached and capped at 30 AI calls per day on the public site.
 
 | Match Analyst | Performance Dashboard |
 |---|---|
@@ -29,7 +31,6 @@ football-data.co.uk + footballdatabase ─► pipeline.py ─► PostgreSQL / SQ
 pip install -r requirements.txt
 python fetch_egypt.py                                 # Egyptian results 2009/10 -> today (~5 min, polite delays)
 python pipeline.py                                    # load both leagues into SQL
-python statsbomb.py                                   # player/team event data for the dashboard
 streamlit run Match_Analyst.py                        # web app: match analyst + performance dashboard
 python main.py "Arsenal" "Liverpool" --date 2026-11-01
 python main.py "El Zamalek" "Al Ahly" --league EGY --season 2627 --date 2026-10-30
@@ -105,6 +106,5 @@ Fact checker: clean report passes; injected fake stat, fake score, fake probabil
 ## Limitations / next steps
 
 - Egyptian data has results only (no shots/xG); without `fetch_egypt.py` the pipeline falls back to the Kaggle 2010–2018 dataset.
-- Dashboard covers 3 tournaments with free event data; club-level player data needs a paid provider.
-- Team-level data only — player stats and injuries need a paid API.
+- Team-level data only — current-season player stats need an API (e.g. API-Football) and are the next step.
 - TF-IDF retrieval → swap for embeddings + pgvector.

@@ -50,6 +50,12 @@ h1, h2, h3 {{ letter-spacing: -0.02em; }}
          background: rgba(43,217,160,.08); border: 1px solid rgba(43,217,160,.35); color: {C['text']}; }}
 .check.bad {{ background: rgba(239,68,68,.08); border-color: rgba(239,68,68,.4); }}
 .report p {{ font-size: 15px; line-height: 1.75; color: {C['text']}; margin: 0 0 10px; }}
+.report .rh {{ color: {C['accent']}; font-size: 13px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; margin: 18px 0 6px; }}
+.report .rh:first-child {{ margin-top: 0; }}
+.report ul {{ margin: 0 0 6px; padding-inline-start: 20px; }}
+.report li {{ font-size: 15px; line-height: 1.7; color: {C['text']}; margin-bottom: 4px; }}
+.rtl .rh {{ letter-spacing: 0; font-size: 16px; }}
+.rtl li {{ font-size: 16px; }}
 .report b {{ color: {C['accent']}; font-weight: 600; }}
 .rtl {{ direction: rtl; text-align: right; font-family: 'Cairo', sans-serif; }}
 .rtl p {{ font-size: 16px; }}
@@ -73,8 +79,8 @@ pio.templates["pitch"] = go.layout.Template(layout=go.Layout(
     colorway=[C["accent"], C["home"], C["away"], "#B07CFF", "#FF6B8B", "#7DD3FC", "#FACC15", "#94A3B8"],
     xaxis={"gridcolor": C["border"], "zerolinecolor": C["border"], "linecolor": C["border"]},
     yaxis={"gridcolor": C["border"], "zerolinecolor": C["border"], "linecolor": C["border"]},
-    legend={"bgcolor": "rgba(0,0,0,0)", "orientation": "h", "y": -0.18},
-    margin={"l": 10, "r": 10, "t": 48, "b": 10},
+    legend={"bgcolor": "rgba(0,0,0,0)", "orientation": "h", "y": 1.0, "yanchor": "bottom", "x": 1, "xanchor": "right"},
+    margin={"l": 10, "r": 10, "t": 60, "b": 10},
     polar={"bgcolor": "rgba(0,0,0,0)", "radialaxis": {"gridcolor": C["border"], "linecolor": C["border"]},
            "angularaxis": {"gridcolor": C["border"], "linecolor": C["border"]}},
 ))
@@ -160,18 +166,37 @@ def tiles(items: list[str]):
         col.markdown(item, unsafe_allow_html=True)
 
 
+ISO_OPEN, ISO_CLOSE = "\u2068", "\u2069"  # bidi isolates used by the template writer
 LATIN_RUN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 .'’&;\-–:%/]*[A-Za-z0-9%]|[A-Za-z0-9]")
 
 
 def report_html(markdown: str, rtl: bool = False) -> str:
-    paragraphs = [p.strip().replace("⁨", "").replace("⁩", "") for p in markdown.split("\n\n") if p.strip()]
+    """Render the report's small markdown subset (### headings, - bullets, **bold**) as a styled card."""
 
-    def para(p: str) -> str:
-        text = e(p, quote=False)
+    def inline(t: str) -> str:
+        t = e(t.replace(ISO_OPEN, "").replace(ISO_CLOSE, ""), quote=False)
         if rtl:  # isolate English names, dates and scores so they don't scramble the Arabic sentence
-            text = LATIN_RUN.sub(lambda m: f'<span dir="ltr" style="unicode-bidi:isolate;white-space:nowrap">{m.group(0)}</span>', text)
-        bold = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
-        return f"<p>{bold}</p>"
+            t = LATIN_RUN.sub(lambda m: f'<span dir="ltr" style="unicode-bidi:isolate;white-space:nowrap">{m.group(0)}</span>', t)
+        return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", t)
 
-    body = "".join(para(p) for p in paragraphs)
-    return f'<div class="card report {"rtl" if rtl else ""}">{body}</div>'
+    out, in_list = [], False
+    for line in markdown.splitlines():
+        line = line.strip()
+        is_item = line.startswith(("- ", "* ", "• "))
+        if in_list and not is_item:
+            out.append("</ul>")
+            in_list = False
+        if not line or line.startswith("## "):
+            continue
+        if line.startswith("#"):
+            out.append(f"<div class=\"rh\">{inline(line.lstrip('#').strip())}</div>")
+        elif is_item:
+            if not in_list:
+                out.append("<ul>")
+                in_list = True
+            out.append(f"<li>{inline(line[2:])}</li>")
+        else:
+            out.append(f"<p>{inline(line)}</p>")
+    if in_list:
+        out.append("</ul>")
+    return f'<div class="card report {"rtl" if rtl else ""}">{"".join(out)}</div>'
