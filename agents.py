@@ -5,8 +5,10 @@ import re
 import time
 
 CLAUDE_MODEL = os.getenv("ANALYST_MODEL", "claude-sonnet-5-5")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
-GEMINI_FALLBACK = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-flash-lite-latest")
+# lite first: measured on the live site it wrote a report that passed the fact check in ~1.5 s,
+# while gemini-flash-latest often took 25 s+ (once 158 s)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
+GEMINI_FALLBACK = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-flash-latest")
 GEMINI_TIMEOUT_MS = 25_000
 
 SYSTEM = """You are a senior football performance analyst writing a pre-match briefing for a coaching staff.
@@ -64,8 +66,8 @@ class AnalysisAgent:
             # a small thinking budget keeps the report fast, the numbers are already computed for it
             config = types.GenerateContentConfig(system_instruction=SYSTEM, temperature=0.3, max_output_tokens=8192,
                                                  thinking_config=types.ThinkingConfig(thinking_budget=512))
-            # main model once; if it is overloaded (503) or slow, move straight to the lite model (two tries)
-            for model, tries in ((GEMINI_MODEL, 1), (GEMINI_FALLBACK, 2)):
+            # main (fast) model twice, then the bigger model once if it is overloaded (503) or slow
+            for model, tries in ((GEMINI_MODEL, 2), (GEMINI_FALLBACK, 1)):
                 for attempt in range(tries):
                     try:
                         resp = client.models.generate_content(model=model, contents=prompt, config=config)
