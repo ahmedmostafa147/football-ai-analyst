@@ -7,6 +7,7 @@ import time
 CLAUDE_MODEL = os.getenv("ANALYST_MODEL", "claude-sonnet-5-5")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 GEMINI_FALLBACK = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-flash-lite-latest")
+GEMINI_TIMEOUT_MS = 25_000
 
 SYSTEM = """You are a senior football performance analyst writing a pre-match briefing for a coaching staff.
 Use ONLY the facts in the JSON context. Never invent players, injuries, line-ups or numbers.
@@ -55,19 +56,24 @@ class AnalysisAgent:
             from google import genai
             from google.genai import types
             from google.genai import errors
-            client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+            import httpx
+            # 25 s per request: an overloaded model once kept a visitor waiting 158 s
+            client = genai.Client(api_key=os.environ["GEMINI_API_KEY"],
+                                  http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS))
             # thinking tokens count towards max_output_tokens (3000 cut the Arabic section off mid-report);
             # a small thinking budget keeps the report fast, the numbers are already computed for it
             config = types.GenerateContentConfig(system_instruction=SYSTEM, temperature=0.3, max_output_tokens=8192,
                                                  thinking_config=types.ThinkingConfig(thinking_budget=512))
-            for model in (GEMINI_MODEL, GEMINI_FALLBACK):  # the main model is sometimes overloaded (HTTP 503)
-                for attempt in range(2):
+            # main model once; if it is overloaded (503) or slow, move straight to the lite model (two tries)
+            for model, tries in ((GEMINI_MODEL, 1), (GEMINI_FALLBACK, 2)):
+                for attempt in range(tries):
                     try:
                         resp = client.models.generate_content(model=model, contents=prompt, config=config)
                         self.model_used = model
                         return resp.text or ""
-                    except errors.ServerError:
-                        time.sleep(3 * (attempt + 1))
+                    except (errors.ServerError, httpx.TimeoutException):
+                        if attempt + 1 < tries:
+                            time.sleep(2)
             raise RuntimeError("Gemini overloaded")
         import anthropic
         msg = anthropic.Anthropic().messages.create(

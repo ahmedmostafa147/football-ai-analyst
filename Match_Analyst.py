@@ -151,8 +151,10 @@ if hh["meetings"]:
     st.write("")
 
 v = result["validation"]
-writer = {"llm:gemini": "Gemini", "llm:claude": "Claude"}.get(":".join(result["mode"].split(":")[:2]),
-                                                              "the offline template")
+mode = result["mode"].split(":")  # e.g. llm:gemini:gemini-flash-lite-latest
+writer = {"llm:gemini": "Gemini", "llm:claude": "Claude"}.get(":".join(mode[:2]), "the offline template")
+if len(mode) == 3 and mode[0] == "llm":
+    writer += f" ({mode[2]})"
 ui.html_block(f'<div class="check {"" if v["passed"] else "bad"}">'
               f'{"✓ Every number in the report was checked against the data" if v["passed"] else "⚠ " + ui.e(", ".join(v["issues"]))}'
               f' · written by {ui.e(writer)}</div>'
