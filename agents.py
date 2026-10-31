@@ -56,8 +56,10 @@ class AnalysisAgent:
             from google.genai import types
             from google.genai import errors
             client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-            # thinking tokens count towards max_output_tokens; 3000 cut the Arabic section off mid-report
-            config = types.GenerateContentConfig(system_instruction=SYSTEM, temperature=0.3, max_output_tokens=8192)
+            # thinking tokens count towards max_output_tokens (3000 cut the Arabic section off mid-report);
+            # a small thinking budget keeps the report fast, the numbers are already computed for it
+            config = types.GenerateContentConfig(system_instruction=SYSTEM, temperature=0.3, max_output_tokens=8192,
+                                                 thinking_config=types.ThinkingConfig(thinking_budget=512))
             for model in (GEMINI_MODEL, GEMINI_FALLBACK):  # the main model is sometimes overloaded (HTTP 503)
                 for attempt in range(2):
                     try:
@@ -135,19 +137,21 @@ def orchestrate(ctx: dict, max_attempts: int = 3, use_ai: bool = True) -> dict:
     if not use_ai:  # e.g. daily AI budget used up on the public site
         analyst.provider = None
     feedback = None
+    start = time.perf_counter()
     for attempt in range(1, max_attempts + 1):
         report = analyst.run(ctx, feedback)
         verdict = checker.run(report, ctx)
         if verdict["passed"]:
             break
         feedback = verdict["issues"]
+    seconds = round(time.perf_counter() - start, 1)
     if not verdict["passed"] and analyst.provider and not analyst.error:
         # never show a report that failed the check: fall back to the grounded template
         report = template_report(ctx)
         verdict = checker.run(report, ctx)
-        return {"report": report, "validation": verdict, "attempts": attempt,
+        return {"report": report, "validation": verdict, "attempts": attempt, "seconds": seconds,
                 "mode": f"template (AI report failed fact check: {', '.join(feedback)})"}
-    return {"report": report, "validation": verdict, "attempts": attempt, "mode": analyst.mode}
+    return {"report": report, "validation": verdict, "attempts": attempt, "seconds": seconds, "mode": analyst.mode}
 
 
 from report_template import template_report  # noqa: E402  (offline writer, kept in its own module)

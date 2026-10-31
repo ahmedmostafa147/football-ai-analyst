@@ -1,6 +1,7 @@
 """Retrieval layer: structured facts via SQL + relevant match documents via RAG (TF-IDF) + prediction model."""
 import math
 from datetime import date
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -209,7 +210,19 @@ class MatchRAG:
         return [self.docs.content.iloc[i] for i in top if scores[i] > 0]
 
 
+@lru_cache(maxsize=8)
+def _strength_model(league: str, before: date, version: str) -> "TeamStrengthModel":
+    """Fitting takes a few seconds; every fixture on the same date reuses it. version busts it on a data refresh."""
+    return TeamStrengthModel(league, before)
+
+
+@lru_cache(maxsize=8)
+def _rag(league: str, before: date, version: str) -> "MatchRAG":
+    return MatchRAG(league, before)
+
+
 def build_context(home: str, away: str, kickoff: date, league: str, season: str) -> dict:
+    version = data_version(league)
     table = league_table(kickoff, league, season)
     pos = lambda t: table.loc[t].to_dict() if t in table.index else None
     return {
@@ -219,6 +232,6 @@ def build_context(home: str, away: str, kickoff: date, league: str, season: str)
         "home_record": split(home, "home", kickoff, league, season),
         "away_record": split(away, "away", kickoff, league, season),
         "head_to_head": head_to_head(home, away, kickoff),
-        "model": TeamStrengthModel(league, kickoff).predict(home, away),
-        "retrieved_documents": MatchRAG(league, kickoff).search(f"{home} {away} {home} vs {away}"),
+        "model": _strength_model(league, kickoff, version).predict(home, away),
+        "retrieved_documents": _rag(league, kickoff, version).search(f"{home} {away} {home} vs {away}"),
     }

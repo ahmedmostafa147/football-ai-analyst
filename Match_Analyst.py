@@ -1,5 +1,6 @@
 """Web page: streamlit run Match_Analyst.py"""
 import os
+import time
 from datetime import date, timedelta
 
 import streamlit as st
@@ -109,16 +110,20 @@ if run:
     with st.status("Analysing the match...", expanded=True) as status:
         st.write("1 · Pulling facts with SQL: table, form, home/away record, head-to-head")
         st.write("2 · Retrieving similar past matches (RAG) and fitting the team-strength model")
+        t0 = time.perf_counter()
         ctx = context(home, away, kickoff, league, season, version)
+        t1 = time.perf_counter()
         st.write("3 · Writing the report and fact checking every number")
         result = report(home, away, kickoff, league, season, version, _ai_allowed())
+        t2 = time.perf_counter()
         status.update(label="Analysis ready", state="complete", expanded=False)
-    st.session_state["analysis"] = (ctx, result)
+    # wall-clock of this click (0 s when served from cache), shown so slow steps are visible
+    st.session_state["analysis"] = (ctx, result, {"data": t1 - t0, "report": t2 - t1})
 
 if "analysis" not in st.session_state:
     st.stop()
 
-ctx, result = st.session_state["analysis"]
+ctx, result, timing = st.session_state["analysis"]
 home, away = ctx["match"]["home"], ctx["match"]["away"]
 st.write("")
 ui.html_block(ui.matchup(home, away, ctx["model"], ctx["match"]["date"]))
@@ -152,7 +157,9 @@ ui.html_block(f'<div class="check {"" if v["passed"] else "bad"}">'
               f'{"✓ Every number in the report was checked against the data" if v["passed"] else "⚠ " + ui.e(", ".join(v["issues"]))}'
               f' · written by {ui.e(writer)}</div>'
               '<div class="hint">The fact checker is plain code, not AI: it compares every number and score in the '
-              'report with the data above and sends the report back for a rewrite if one is invented.</div>')
+              'report with the data above and sends the report back for a rewrite if one is invented.</div>'
+              f'<div class="hint">Timing · data + model {timing["data"]:.1f} s · report {timing["report"]:.1f} s '
+              f'({result["attempts"]} attempt{"s" if result["attempts"] > 1 else ""})</div>')
 st.write("")
 
 english, _, arabic = result["report"].partition("## العربية")  # no crash if a section is missing
