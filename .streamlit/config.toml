@@ -8,3 +8,4 @@ font = "sans serif"
 
 [client]
 toolbarMode = "viewer"
+showSidebarNavigation = false  # pages are linked at the top of each page (ui.setup)

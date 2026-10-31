@@ -41,14 +41,18 @@ def _ai_allowed() -> bool:
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
-def analyse(home: str, away: str, kickoff: date, league: str, season: str, use_ai: bool, version: str):
-    """use_ai and version (data_version) are part of the cache key: a new API key, the daily cap or a data
-    refresh all give a fresh report."""
-    ctx = build_context(home, away, kickoff, league, season)
+def context(home: str, away: str, kickoff: date, league: str, season: str, version: str) -> dict:
+    """SQL facts + RAG + model. version (data_version) is in the cache key, so a data refresh gives fresh facts."""
+    return build_context(home, away, kickoff, league, season)
+
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def report(home: str, away: str, kickoff: date, league: str, season: str, version: str, use_ai: bool) -> dict:
+    """use_ai is part of the cache key, so adding an API key or hitting the daily cap gives a fresh report."""
     if use_ai:
         usage, today = _usage(), str(date.today())
         usage[today] = usage.get(today, 0) + 1
-    return ctx, orchestrate(ctx, use_ai=use_ai)
+    return orchestrate(context(home, away, kickoff, league, season, version), use_ai=use_ai)
 
 
 def upcoming(league: str, season: str, limit: int = 40) -> list[dict]:
@@ -73,10 +77,8 @@ ui.hero("Pre-match intelligence", "Match Analyst",
         [f"{n:,} {LEAGUES[l]} matches" for l, n in counts.items()] + ["SQL · RAG · LLM · fact checking"])
 
 with st.container(border=True):
-    l1, l2 = st.columns([3, 1])
-    league = l1.segmented_control("League", list(LEAGUES), format_func=LEAGUES.get, default="EGY") or "EGY"
-    season_list = seasons(league)
-    season = l2.selectbox("Season", season_list[::-1], format_func=lambda s: f"20{s[:2]}/{s[2:]}")
+    league = st.segmented_control("League", list(LEAGUES), format_func=LEAGUES.get, default="EGY") or "EGY"
+    season = seasons(league)[-1]  # current season only (owner's rule: no old tournaments on screen)
     team_list = teams(league, season)
     with engine().connect() as c:
         last_played = c.execute(text("SELECT MAX(date) FROM matches WHERE league = :l AND season = :s"),
@@ -86,28 +88,31 @@ with st.container(border=True):
     fixture = None
     if fixtures:
         favourite = next((i for i, f in enumerate(fixtures) if set(d_home) & {f["home"], f["away"]}), 0)
-        options = ["Pick teams yourself"] + [f"{f['date']} · {f['home']} vs {f['away']}" for f in fixtures]
-        choice = st.selectbox("Upcoming fixture", range(len(options)), index=favourite + 1,
-                              format_func=options.__getitem__)
-        fixture = fixtures[choice - 1] if choice else None
-    c1, c2, c3 = st.columns([2, 2, 1])
-    if fixture:
+        options = [f"{ui.nice_date(f['date'])} · {f['home']} vs {f['away']}" for f in fixtures] + ["Pick teams yourself"]
+        choice = st.selectbox(f"Upcoming fixture · season 20{season[:2]}/{season[2:]}", range(len(options)),
+                              index=favourite, format_func=options.__getitem__)
+        fixture = fixtures[choice] if choice < len(fixtures) else None
+    if fixture:  # the fixture line already shows teams and date, so no extra fields (they pushed the button off-screen on phones)
         home, away, kickoff = fixture["home"], fixture["away"], date.fromisoformat(fixture["date"])
-        c1.text_input("Home team", home, disabled=True)
-        c2.text_input("Away team", away, disabled=True)
-        c3.text_input("Match date", str(kickoff), disabled=True)
     else:
+        c1, c2, c3 = st.columns([2, 2, 1])
         home = c1.selectbox("Home team", team_list, index=_pick(d_home, team_list, 0))
         away = c2.selectbox("Away team", team_list, index=_pick(d_away, team_list, 1))
         kickoff = c3.date_input("Match date", max(date.today(), date.fromisoformat(str(last_played)) + timedelta(days=1)))
-    run = st.button("Analyse match", type="primary", use_container_width=True)
+    run = st.button("Analyse match", type="primary", width="stretch")
 
 if run:
     if home == away:
         st.error("Pick two different teams.")
         st.stop()
-    with st.spinner("Collecting data, retrieving similar matches, predicting, fact checking..."):
-        ctx, result = analyse(home, away, kickoff, league, season, _ai_allowed(), data_version(league))
+    version = data_version(league)
+    with st.status("Analysing the match...", expanded=True) as status:
+        st.write("1 · Pulling facts with SQL: table, form, home/away record, head-to-head")
+        st.write("2 · Retrieving similar past matches (RAG) and fitting the team-strength model")
+        ctx = context(home, away, kickoff, league, season, version)
+        st.write("3 · Writing the report and fact checking every number")
+        result = report(home, away, kickoff, league, season, version, _ai_allowed())
+        status.update(label="Analysis ready", state="complete", expanded=False)
     st.session_state["analysis"] = (ctx, result)
 
 if "analysis" not in st.session_state:
@@ -130,7 +135,7 @@ hh = ctx["head_to_head"]
 if hh["meetings"]:
     total = hh["meetings"]
     seg = lambda n, color: f'<div style="width:{100 * n / total}%;background:{color}"></div>'
-    recent = "".join(f'<div><span class="d">{ui.e(g[:10])}</span>{ui.e(g[11:])}</div>' for g in hh["recent"])
+    recent = ui.games_html(hh["recent"])
     ui.html_block(f"""
 <div class="card"><h4>Head-to-head · {total} meetings</h4>
   <div class="bar">{seg(hh[f'{home}_wins'], ui.C['home'])}{seg(hh['draws'], ui.C['draw'])}{seg(hh[f'{away}_wins'], ui.C['away'])}</div>
@@ -145,12 +150,25 @@ writer = {"llm:gemini": "Gemini", "llm:claude": "Claude"}.get(":".join(result["m
                                                               "the offline template")
 ui.html_block(f'<div class="check {"" if v["passed"] else "bad"}">'
               f'{"✓ Every number in the report was checked against the data" if v["passed"] else "⚠ " + ui.e(", ".join(v["issues"]))}'
-              f' · written by {ui.e(writer)}</div>')
+              f' · written by {ui.e(writer)}</div>'
+              '<div class="hint">The fact checker is plain code, not AI: it compares every number and score in the '
+              'report with the data above and sends the report back for a rewrite if one is invented.</div>')
 st.write("")
 
 english, _, arabic = result["report"].partition("## العربية")  # no crash if a section is missing
 tab_ar, tab_en, tab_rag = st.tabs(["التقرير بالعربي", "English report", "Retrieved matches (RAG)"])
 tab_ar.markdown(ui.report_html(arabic, rtl=True), unsafe_allow_html=True)
 tab_en.markdown(ui.report_html(english.replace("## English", "")), unsafe_allow_html=True)
-tab_rag.markdown('<div class="card games">' + "".join(f"<div>{ui.e(d)}</div>" for d in ctx["retrieved_documents"]) + "</div>",
-                 unsafe_allow_html=True)
+
+def rag_row(i: int, doc: str) -> str:
+    """'2026-10-30 A 1-1 B, red cards 0-1.' -> numbered row: date · result in bold · extra stats muted"""
+    head, _, details = doc.rstrip(".").partition(", ")
+    return (f'<div class="rag"><span class="i">#{i}</span><span class="d" style="color:{ui.C["muted"]};min-width:96px">'
+            f'{ui.e(ui.nice_date(head[:10])[4:])}</span><span><b>{ui.e(head[11:])}</b>'
+            f'<span style="color:{ui.C["muted"]}"> {ui.e(details)}</span></span></div>')
+
+
+docs = ctx["retrieved_documents"]
+tab_rag.markdown('<div class="card"><h4>Past matches the AI read before writing, most similar first</h4>'
+                 + ("".join(rag_row(i, d) for i, d in enumerate(docs, 1)) or '<div class="rag">No similar matches found.</div>')
+                 + "</div>", unsafe_allow_html=True)

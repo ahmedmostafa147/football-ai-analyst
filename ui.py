@@ -69,6 +69,21 @@ button[data-testid="stBaseButton-primary"] p, div.stButton > button[kind="primar
 button[data-testid="stBaseButton-primary"]:hover {{ background: #5BE6B8; }}
 [data-testid="stTabs"] button p {{ font-size: 14px; font-weight: 600; }}
 [data-testid="stSidebar"] {{ background: {C['surface']}; border-right: 1px solid {C['border']}; }}
+[data-testid="stPageLink"] a {{ border: 1px solid {C['border']}; border-radius: 999px; padding: 2px 12px; background: {C['surface']}; }}
+[data-testid="stPageLink"] a[aria-current="page"] {{ border-color: {C['accent']}; }}
+[data-testid="stButtonGroup"] > div {{ flex-wrap: wrap; }}
+.rag {{ display:flex; gap:12px; align-items:center; padding: 9px 0; border-bottom: 1px solid {C['border']}; font-size: 14px; }}
+.rag:last-child {{ border-bottom: none; }}
+.rag .i {{ color: {C['muted']}; font-size: 12px; min-width: 22px; }}
+.hint {{ color: {C['muted']}; font-size: 12px; margin-top: 10px; }}
+@media (max-width: 640px) {{
+  .block-container {{ padding-top: 2.6rem; }}
+  .hero-title {{ font-size: 30px; }}
+  .vs .team {{ font-size: 17px; }}
+  .vs .score {{ font-size: 26px; }}
+  .legend b {{ font-size: 16px; }}
+  .card {{ padding: 14px; }}
+}}
 </style>
 """
 
@@ -90,8 +105,23 @@ e = html.escape
 
 
 def setup(title: str, icon: str):
-    st.set_page_config(page_title=title, page_icon=icon, layout="wide")
+    st.set_page_config(page_title=title, page_icon=icon, layout="wide", initial_sidebar_state="collapsed")
     st.markdown(CSS, unsafe_allow_html=True)
+    # page links at the top: the sidebar menu is hidden on phones, so visitors never found the dashboard
+    nav = st.container(horizontal=True)  # one row on phones too (st.columns would stack)
+    nav.page_link("Match_Analyst.py", label="Match Analyst", icon="⚽")
+    nav.page_link("pages/2_Performance_Dashboard.py", label="Dashboard", icon="📊")
+
+
+def nice_date(iso: str) -> str:
+    """2026-11-23 -> Mon 23 Nov 2026"""
+    from datetime import date
+    return date.fromisoformat(str(iso)[:10]).strftime("%a %d %b %Y")
+
+
+def games_html(games: list[str]) -> str:
+    """'2026-10-30 Home 1-1 Away' lines -> rows with a short date"""
+    return "".join(f'<div><span class="d">{e(nice_date(g[:10])[4:])}</span>{e(g[11:])}</div>' for g in games)
 
 
 def hero(kicker: str, title: str, subtitle: str, pills: list[str] = ()):
@@ -116,7 +146,7 @@ def matchup(home: str, away: str, m: dict, date: str) -> str:
 <div class="card">
   <div class="vs">
     <div class="team" style="color:{C['home']}">{e(home)}</div>
-    <div class="mid">Most likely score<div class="score">{e(m['most_likely_score'])}</div>{e(date)}</div>
+    <div class="mid">Most likely score<div class="score">{e(m['most_likely_score'])}</div>{e(nice_date(date))}</div>
     <div class="team" style="color:{C['away']};text-align:right">{e(away)}</div>
   </div>
   <div class="bar">
@@ -132,6 +162,8 @@ def matchup(home: str, away: str, m: dict, date: str) -> str:
   <div class="legend" style="margin-top:10px">
     <div>Expected goals {m['expected_goals_home']}</div><div>Expected goals {m['expected_goals_away']}</div>
   </div>
+  <div class="hint">Expected goals = how many goals the model expects each team to score, from both teams'
+  attack and defence over recent seasons (recent matches count more).</div>
 </div>"""
 
 
@@ -141,7 +173,7 @@ def team_card(team: str, color: str, table: dict | None, form: dict, record: dic
             (f"{venue} goals scored per game", record.get("scored") if record.get("played") else "–"),
             (f"{venue} goals conceded per game", record.get("conceded") if record.get("played") else "–")]
     rows_html = "".join(f'<div class="row"><span class="k">{k}</span><span>{v}</span></div>' for k, v in rows)
-    games = "".join(f'<div><span class="d">{e(g[:10])}</span>{e(g[11:])}</div>' for g in form["games"])
+    games = games_html(form["games"])
     return f"""
 <div class="card" style="border-top:3px solid {color}">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">

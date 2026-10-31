@@ -48,9 +48,8 @@ ui.hero("Team performance", "Performance Dashboard",
         "is stronger or weaker than the rest of the league.")
 
 with st.container(border=True):
-    c1, c2 = st.columns([3, 1])
-    league = c1.segmented_control("League", list(LEAGUES), format_func=LEAGUES.get, default="EGY") or "EGY"
-    season = c2.selectbox("Season", seasons(league)[::-1], format_func=lambda s: f"20{s[:2]}/{s[2:]}")
+    league = st.segmented_control("League", list(LEAGUES), format_func=LEAGUES.get, default="EGY") or "EGY"
+season = seasons(league)[-1]  # current season only (owner's rule: no old tournaments on screen)
 
 tm = team_matches(league, season, data_version(league))
 available = [m for m in METRICS if tm[m].notna().any()]  # Egyptian data has goals only
@@ -62,7 +61,7 @@ table = table.assign(gd=table.gf - table.ga).sort_values(["points", "gd", "gf"],
 table.insert(0, "pos", range(1, len(table) + 1))
 teams = list(table.index)
 default_team = next((t for t in ("El Zamalek", "Zamalek SC", "Arsenal") if t in teams), teams[0])
-st.caption(f"{len(tm) // 2} matches played this season · last match {tm.date.max()}")
+st.caption(f"Season 20{season[:2]}/{season[2:]} · {len(tm) // 2} matches played · last match {ui.nice_date(tm.date.max())}")
 
 tab_team, tab_league, tab_sw = st.tabs(["Team analysis", "League overview", "Strengths & weaknesses"])
 
@@ -85,28 +84,37 @@ with tab_team:
     ui.tiles(tiles)
     st.write("")
 
-    label = games.opponent.str.slice(0, 14) + " (" + games.venue.str[0] + ")"
+    # x = match number (readable on phones); opponent and venue go in the hover
+    label = list(range(1, len(games) + 1))
+    hover = (games.opponent + " (" + games.venue + ")").tolist()
     left, right = st.columns(2)
-    fig = go.Figure([go.Bar(name="Scored", x=label, y=games.goals_for, marker_color=ui.C["accent"]),
-                     go.Bar(name="Conceded", x=label, y=games.goals_against, marker_color=ui.C["loss"])])
+    fig = go.Figure([go.Bar(name="Scored", x=label, y=games.goals_for, marker_color=ui.C["accent"], hovertext=hover),
+                     go.Bar(name="Conceded", x=label, y=games.goals_against, marker_color=ui.C["loss"], hovertext=hover)])
     if has_xg:
-        fig.add_trace(go.Scatter(name="xG created", x=label, y=games.xg_for, mode="lines+markers",
+        fig.add_trace(go.Scatter(name="xG created", x=label, y=games.xg_for, mode="lines+markers", hovertext=hover,
                                  line={"color": ui.C["home"], "width": 2}))
-    fig.update_layout(barmode="group", title="Every match this season", height=380)
-    left.plotly_chart(fig, use_container_width=True)
+    fig.update_layout(barmode="group", title="Goals in every match this season", height=380,
+                      xaxis={"title": "Match number", "dtick": 1}, yaxis={"dtick": 1})
+    left.plotly_chart(fig, width="stretch")
 
     cum = games.points.cumsum().reset_index(drop=True)
     fig = go.Figure(go.Scatter(x=list(range(1, len(cum) + 1)), y=cum, mode="lines+markers",
                                line={"color": ui.C["accent"], "width": 3}, fill="tozeroy",
                                fillcolor="rgba(43,217,160,0.12)"))
     fig.update_layout(title="Points collected over the season", height=380,
-                      xaxis_title="Match number", yaxis_title="Points")
-    right.plotly_chart(fig, use_container_width=True)
+                      xaxis={"title": "Match number", "dtick": 1}, yaxis_title="Points")
+    right.plotly_chart(fig, width="stretch")
 
     cols = ["date", "venue", "opponent", "result", "goals_for", "goals_against"] + \
            [c for c in ("xg_for", "xg_against", "shots_for", "sot_for") if c in available]
-    st.dataframe(games[cols].iloc[::-1], hide_index=True, use_container_width=True,
-                 column_config={"goals_for": "Scored", "goals_against": "Conceded", "xg_for": "xG",
+    shown = games[cols].iloc[::-1].copy()
+    shown["date"] = shown.date.map(ui.nice_date)
+    result_color = {"W": ui.C["win"], "D": ui.C["draw"], "L": ui.C["loss"]}
+    st.dataframe(shown.style.map(lambda r: f"color:{result_color[r]};font-weight:700", subset=["result"])
+                 .format(precision=2).format("{:.0f}", subset=[c for c in cols if c.endswith(("goals_for", "goals_against", "shots_for", "sot_for"))]),
+                 hide_index=True, width="stretch",
+                 column_config={"date": "Date", "venue": "Venue", "opponent": "Opponent", "result": "Result",
+                                "goals_for": "Scored", "goals_against": "Conceded", "xg_for": "xG",
                                 "xg_against": "xG against", "shots_for": "Shots", "sot_for": "On target"})
 
 # ---------- League overview ----------
@@ -122,9 +130,10 @@ with tab_league:
                       xaxis_title=METRICS[x][0] + " per match", yaxis_title=METRICS[y][0] + " per match",
                       yaxis={"autorange": "reversed"})
     left, right = st.columns([3, 2])
-    left.plotly_chart(fig, use_container_width=True)
-    right.dataframe(table, use_container_width=True, height=560,
-                    column_config={"pos": "#", "played": "P", "points": "Pts", "gf": "GF", "ga": "GA", "gd": "GD"})
+    left.plotly_chart(fig, width="stretch")
+    right.dataframe(table, width="stretch", height=560,
+                    column_config={"_index": "Team", "pos": "#", "played": "P", "points": "Pts",
+                                   "gf": "GF", "ga": "GA", "gd": "GD"})
 
 # ---------- Strengths & weaknesses ----------
 with tab_sw:
@@ -152,4 +161,4 @@ with tab_sw:
     fig = go.Figure(go.Bar(x=ranked.values, y=[METRICS[m][0] for m in ranked.index], orientation="h",
                            marker_color=[ui.C["win"] if v > 0 else ui.C["loss"] for v in ranked.values]))
     fig.update_layout(title=f"{team2} vs league average (standard deviations, right = better)", height=440)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
