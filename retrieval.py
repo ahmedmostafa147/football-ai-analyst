@@ -54,6 +54,12 @@ def seasons(league: str) -> list[str]:
     return [r["season"] for r in rows]
 
 
+def data_version(league: str) -> str:
+    """Changes whenever the league's data is refreshed; pass it to cached functions so they never serve old numbers."""
+    row = _rows("SELECT COUNT(*) AS n, MAX(date) AS last FROM matches WHERE league = :l", l=league)[0]
+    return f"{row['n']}:{row['last']}"
+
+
 def teams(league: str, season: str) -> list[str]:
     rows = _rows("SELECT DISTINCT home FROM matches WHERE league = :l AND season = :s ORDER BY home", l=league, s=season)
     return [r["home"] for r in rows]

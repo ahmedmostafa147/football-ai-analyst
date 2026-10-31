@@ -8,7 +8,7 @@ from sqlalchemy import text
 import ui
 from agents import orchestrate
 from pipeline import LEAGUES, engine
-from retrieval import build_context, seasons, teams
+from retrieval import build_context, data_version, seasons, teams
 
 # default matchup per league (names differ between the Kaggle and footballdatabase sources)
 DEFAULTS = {"EPL": (["Arsenal"], ["Liverpool"]),
@@ -41,8 +41,9 @@ def _ai_allowed() -> bool:
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
-def analyse(home: str, away: str, kickoff: date, league: str, season: str, use_ai: bool):
-    """use_ai is part of the cache key, so adding an API key or hitting the daily cap gives a fresh report."""
+def analyse(home: str, away: str, kickoff: date, league: str, season: str, use_ai: bool, version: str):
+    """use_ai and version (data_version) are part of the cache key: a new API key, the daily cap or a data
+    refresh all give a fresh report."""
     ctx = build_context(home, away, kickoff, league, season)
     if use_ai:
         usage, today = _usage(), str(date.today())
@@ -106,7 +107,7 @@ if run:
         st.error("Pick two different teams.")
         st.stop()
     with st.spinner("Collecting data, retrieving similar matches, predicting, fact checking..."):
-        ctx, result = analyse(home, away, kickoff, league, season, _ai_allowed())
+        ctx, result = analyse(home, away, kickoff, league, season, _ai_allowed(), data_version(league))
     st.session_state["analysis"] = (ctx, result)
 
 if "analysis" not in st.session_state:
@@ -141,13 +142,13 @@ if hh["meetings"]:
 
 v = result["validation"]
 writer = {"llm:gemini": "Gemini", "llm:claude": "Claude"}.get(":".join(result["mode"].split(":")[:2]),
-                                                              "the offline template (no AI key set)")
+                                                              "the offline template")
 ui.html_block(f'<div class="check {"" if v["passed"] else "bad"}">'
               f'{"✓ Every number in the report was checked against the data" if v["passed"] else "⚠ " + ui.e(", ".join(v["issues"]))}'
               f' · written by {ui.e(writer)}</div>')
 st.write("")
 
-english, arabic = result["report"].split("## العربية")
+english, _, arabic = result["report"].partition("## العربية")  # no crash if a section is missing
 tab_ar, tab_en, tab_rag = st.tabs(["التقرير بالعربي", "English report", "Retrieved matches (RAG)"])
 tab_ar.markdown(ui.report_html(arabic, rtl=True), unsafe_allow_html=True)
 tab_en.markdown(ui.report_html(english.replace("## English", "")), unsafe_allow_html=True)

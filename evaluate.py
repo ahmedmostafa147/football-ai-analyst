@@ -60,6 +60,7 @@ def fact_checker_test() -> dict:
         "fake_score": clean.replace("## English", "## English\nLast season Arsenal won 9-7 at Anfield."),
         "fake_probability": clean.replace("## English", "## English\nArsenal win chance is 81.2%."),
         "missing_arabic": clean.split("## العربية")[0],
+        "truncated_arabic": clean.split("### التوقع")[0],  # what Gemini did when it hit the token limit
     }
     caught = {name: not checker.run(report, ctx)["passed"] for name, report in injections.items()}
     return {"clean_report_passes": checker.run(clean, ctx)["passed"], "hallucinations_caught": caught}

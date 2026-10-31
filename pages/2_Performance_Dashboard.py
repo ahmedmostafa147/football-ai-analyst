@@ -6,7 +6,7 @@ from sqlalchemy import text
 
 import ui
 from pipeline import LEAGUES, engine
-from retrieval import seasons
+from retrieval import data_version, seasons
 
 ui.setup("Performance Dashboard", "📊")
 
@@ -21,9 +21,9 @@ METRICS = {  # column: (label, higher is better)
 }
 
 
-@st.cache_data
-def team_matches(league: str, season: str) -> pd.DataFrame:
-    """One row per team per match, from that team's point of view."""
+@st.cache_data(ttl=3600)
+def team_matches(league: str, season: str, version: str) -> pd.DataFrame:
+    """One row per team per match, from that team's point of view. version = data_version(), so a refresh busts the cache."""
     with engine().connect() as c:
         df = pd.read_sql(text("SELECT * FROM matches WHERE league = :l AND season = :s"), c,
                          params={"l": league, "s": season})
@@ -52,7 +52,7 @@ with st.container(border=True):
     league = c1.segmented_control("League", list(LEAGUES), format_func=LEAGUES.get, default="EGY") or "EGY"
     season = c2.selectbox("Season", seasons(league)[::-1], format_func=lambda s: f"20{s[:2]}/{s[2:]}")
 
-tm = team_matches(league, season)
+tm = team_matches(league, season, data_version(league))
 available = [m for m in METRICS if tm[m].notna().any()]  # Egyptian data has goals only
 per_team = tm.groupby("team")[available].mean()
 avg = per_team.mean()

@@ -56,13 +56,14 @@ class AnalysisAgent:
             from google.genai import types
             from google.genai import errors
             client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-            config = types.GenerateContentConfig(system_instruction=SYSTEM, temperature=0.3, max_output_tokens=3000)
+            # thinking tokens count towards max_output_tokens; 3000 cut the Arabic section off mid-report
+            config = types.GenerateContentConfig(system_instruction=SYSTEM, temperature=0.3, max_output_tokens=8192)
             for model in (GEMINI_MODEL, GEMINI_FALLBACK):  # the main model is sometimes overloaded (HTTP 503)
                 for attempt in range(2):
                     try:
                         resp = client.models.generate_content(model=model, contents=prompt, config=config)
                         self.model_used = model
-                        return resp.text
+                        return resp.text or ""
                     except errors.ServerError:
                         time.sleep(3 * (attempt + 1))
             raise RuntimeError("Gemini overloaded")
@@ -90,6 +91,8 @@ class ValidationAgent:
     NUM = re.compile(r"(?<![\w.])\d+(?:\.\d+)?%?")
     SCORE = re.compile(r"(?<![\d.])(\d+)\s*[-–]\s*(\d+)(?![\d.])")
     ARABIC_DIGITS = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+    REQUIRED_EN = ("Headline", "Current form", "Key matchup", "Prediction", "Verdict")  # History is optional
+    REQUIRED_AR = ("الخلاصة السريعة", "الفورمة الحالية", "مفتاح المباراة", "التوقع", "الحكم النهائي")
 
     def allowed_numbers(self, ctx: dict) -> set[str]:
         raw = json.dumps(ctx, default=str)
@@ -119,6 +122,11 @@ class ValidationAgent:
         for heading in ("## English", "## العربية"):
             if heading not in report:
                 issues.append(f"Missing section: {heading}")
+        english, _, arabic = report.partition("## العربية")
+        for part, headings in ((english, self.REQUIRED_EN), (arabic, self.REQUIRED_AR)):
+            for h in headings:  # a report cut off by the token limit loses its last sub-headings
+                if not re.search(rf"^###\s*{h}", part, re.M):
+                    issues.append(f"Missing sub-heading: {h}")
         return {"passed": not issues, "issues": sorted(set(issues))}
 
 
@@ -133,6 +141,12 @@ def orchestrate(ctx: dict, max_attempts: int = 3, use_ai: bool = True) -> dict:
         if verdict["passed"]:
             break
         feedback = verdict["issues"]
+    if not verdict["passed"] and analyst.provider and not analyst.error:
+        # never show a report that failed the check: fall back to the grounded template
+        report = template_report(ctx)
+        verdict = checker.run(report, ctx)
+        return {"report": report, "validation": verdict, "attempts": attempt,
+                "mode": f"template (AI report failed fact check: {', '.join(feedback)})"}
     return {"report": report, "validation": verdict, "attempts": attempt, "mode": analyst.mode}
 
 
