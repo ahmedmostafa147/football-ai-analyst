@@ -1,16 +1,22 @@
 # Football AI Match Analyst + Performance Dashboard
 
+**Live:** https://football-ai-analyst-v1.streamlit.app
+
 Pre-match analysis system: real match data → SQL → retrieval (SQL + RAG) → prediction model → LLM analyst → fact-checking agent → bilingual (English / Arabic) report, with a measurable evaluation.
 
-**Leagues:** English Premier League (8,060 matches, 2005 → Oct 2026) and Egyptian Premier League (4,721 matches, 2009 → Oct 2026, current season and upcoming fixtures from Kooora).
+**Leagues:** English Premier League (8,070 matches, 2005 → today) and Egyptian Premier League (4,724 matches, 2009 → today). Data refreshes every morning by a GitHub Action (Kooora for the current Egyptian season, football-data.co.uk for EPL results, openfootball for the EPL schedule).
 
 **Performance dashboard:** current-season team analysis, league overview (attack vs defence) and strengths & weaknesses for every team in both leagues.
 
-**AI writer:** Gemini (`GEMINI_API_KEY`) or Claude (`ANTHROPIC_API_KEY`); without a key an offline template writes the report. Reports are cached and capped at 30 AI calls per day on the public site.
+**AI writer:** Gemini Flash Lite (`GEMINI_API_KEY`, Flash as fallback) or Claude (`ANTHROPIC_API_KEY`); without a key an offline template writes the report. Data + model take under a second and the report a few seconds; the page shows the timing. Reports are cached and capped at 30 AI calls per day on the public site.
 
 | Match Analyst | Performance Dashboard |
 |---|---|
 | ![Match analyst](docs/match_analyst.jpg) | ![Performance dashboard](docs/dashboard.jpg) |
+
+**Fact-checked Arabic report** (every number is verified against the data before it is shown):
+
+![Arabic report](docs/report_arabic.jpg)
 
 ```
 football-data.co.uk + footballdatabase ─► pipeline.py ─► PostgreSQL / SQLite
@@ -19,7 +25,7 @@ football-data.co.uk + footballdatabase ─► pipeline.py ─► PostgreSQL / SQ
                                                      + RAG over match documents (TF-IDF)
                                                      + team-strength prediction model
                                                   │
-                                   agents.py ─────┤  AnalysisAgent (Claude) ⇄ ValidationAgent (fact checker, retry loop)
+                                   agents.py ─────┤  AnalysisAgent (Gemini / Claude) ⇄ ValidationAgent (fact checker, retry loop)
                                                   │
                            Match_Analyst.py / main.py ┘  web page / CLI → reports/*.md + *.json
                                  evaluate.py         backtest of all models + hallucination tests
@@ -96,7 +102,7 @@ No. Extra features and ML models do not beat v2 on probability quality. Around 5
 
 The project uses match and performance data only — no betting odds.
 
-Fact checker: clean report passes; injected fake stat, fake score, fake probability and missing Arabic section are all caught.
+Fact checker: clean report passes; injected fake stat, fake score, fake probability, missing Arabic section and a report cut off mid-way are all caught (5/5).
 
 ## How hallucinations are prevented
 

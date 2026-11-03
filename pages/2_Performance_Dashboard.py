@@ -101,8 +101,8 @@ with tab_team:
     fig = go.Figure(go.Scatter(x=list(range(1, len(cum) + 1)), y=cum, mode="lines+markers",
                                line={"color": ui.C["accent"], "width": 3}, fill="tozeroy",
                                fillcolor="rgba(43,217,160,0.12)"))
-    fig.update_layout(title="Points collected over the season", height=380,
-                      xaxis={"title": "Match number", "dtick": 1}, yaxis_title="Points")
+    fig.update_layout(title="Points collected over the season", height=380,  # padded range: last match was cut off
+                      xaxis={"title": "Match number", "dtick": 1, "range": [0.7, len(cum) + 0.3]}, yaxis_title="Points")
     right.plotly_chart(fig, width="stretch")
 
     cols = ["date", "venue", "opponent", "result", "goals_for", "goals_against"] + \
