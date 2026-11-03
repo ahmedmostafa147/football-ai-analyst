@@ -89,10 +89,12 @@ with st.container(border=True):
     fixture = None
     if fixtures:
         favourite = next((i for i, f in enumerate(fixtures) if set(d_home) & {f["home"], f["away"]}), 0)
-        options = [f"{ui.nice_date(f['date'])} · {f['home']} vs {f['away']}" for f in fixtures] + ["Pick teams yourself"]
+        # "pick teams" first so it is easy to find in a 40-match list; the page still opens on a real fixture
+        options = ["✎ Pick any two teams yourself"] + [f"{ui.nice_date(f['date'])} · {f['home']} vs {f['away']}"
+                                                       for f in fixtures]
         choice = st.selectbox(f"Upcoming fixture · season 20{season[:2]}/{season[2:]}", range(len(options)),
-                              index=favourite, format_func=options.__getitem__)
-        fixture = fixtures[choice] if choice < len(fixtures) else None
+                              index=favourite + 1, format_func=options.__getitem__)
+        fixture = fixtures[choice - 1] if choice else None
     if fixture:  # the fixture line already shows teams and date, so no extra fields (they pushed the button off-screen on phones)
         home, away, kickoff = fixture["home"], fixture["away"], date.fromisoformat(fixture["date"])
     else:
