@@ -201,7 +201,9 @@ def run():
         except requests.HTTPError as e:
             print(f"skip EPL {season}: {e}")
     frames.append(fetch_egypt())
-    df = pd.concat(frames, ignore_index=True).sort_values(["date", "league"]).reset_index(drop=True)
+    # full sort key: same-day matches otherwise come out in a different order each run (Kooora page order),
+    # which changed match_id and made the daily job commit identical data
+    df = pd.concat(frames, ignore_index=True).sort_values(["date", "league", "home", "away"]).reset_index(drop=True)
     df.insert(0, "match_id", range(1, len(df) + 1))
     docs = pd.DataFrame({
         "match_id": df.match_id, "league": df.league, "date": df.date, "home": df.home, "away": df.away,
@@ -218,7 +220,7 @@ def run():
     if EGY_KOOORA.exists():
         k = kooora_matches()
         fixtures.append(k[k.status == "FIXTURE"].assign(league="EGY")[["league", "season", "date", "home", "away"]])
-    fixtures = pd.concat(fixtures, ignore_index=True)
+    fixtures = pd.concat(fixtures, ignore_index=True).sort_values(["league", "date", "home", "away"])
     fixtures.to_sql("fixtures", eng, if_exists="replace", index=False)
     for league, part in fixtures.groupby("league"):
         print(f"{league} fixtures: {len(part)} upcoming")
@@ -232,7 +234,7 @@ def content_hash() -> str:
     import hashlib
     h = hashlib.sha256()
     with engine().connect() as c:
-        for table, order in (("matches", "match_id"), ("fixtures", "league, date, home")):
+        for table, order in (("matches", "league, date, home, away"), ("fixtures", "league, date, home, away")):
             try:
                 for row in c.execute(text(f"SELECT * FROM {table} ORDER BY {order}")):
                     h.update(repr(tuple(row)).encode())
