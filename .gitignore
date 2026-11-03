@@ -1,5 +1,7 @@
 reports/
 __pycache__/
 .cache/
-data/
+data/*
+# Egyptian history 2009/10 -> 2025/26 (fetch_egypt.py); the daily GitHub Action needs it to rebuild football.db
+!data/egypt_results.csv
 .env

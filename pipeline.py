@@ -7,6 +7,7 @@ Leagues:
 """
 import io
 import os
+import time
 from pathlib import Path
 
 import pandas as pd
@@ -36,6 +37,19 @@ def engine():
     return create_engine(DATABASE_URL)
 
 
+def _get(url: str) -> requests.Response:
+    """GET with a few retries: football-data.co.uk sometimes drops the connection mid-run."""
+    for attempt in range(4):
+        try:
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+            return resp
+        except (requests.ConnectionError, requests.Timeout):
+            if attempt == 3:
+                raise
+            time.sleep(5 * (attempt + 1))
+
+
 def _standardise(df: pd.DataFrame, league: str) -> pd.DataFrame:
     for col in ALL_COLUMNS:  # older seasons / other leagues miss some stats
         if col not in df.columns:
@@ -45,8 +59,7 @@ def _standardise(df: pd.DataFrame, league: str) -> pd.DataFrame:
 
 
 def fetch_epl_season(season: str) -> pd.DataFrame:
-    resp = requests.get(EPL_SOURCE.format(season=season), timeout=30)
-    resp.raise_for_status()
+    resp = _get(EPL_SOURCE.format(season=season))
     df = pd.read_csv(io.StringIO(resp.content.decode("utf-8-sig", errors="replace")), on_bad_lines="skip")
     df = df[[c for c in EPL_COLUMNS if c in df.columns]].rename(columns=EPL_COLUMNS)
     df = df.dropna(subset=["home", "away", "home_goals"])
@@ -55,17 +68,40 @@ def fetch_epl_season(season: str) -> pd.DataFrame:
     return _standardise(df, "EPL")
 
 
-EPL_FIXTURES = "https://football-data.co.uk/fixtures.csv"  # next round for every league, updated weekly
+EPL_FIXTURES = "https://football-data.co.uk/fixtures.csv"  # next round only, and empty for days after midweek
+# full-season schedule (public domain); its dates matched all 90 played 2026/27 matches when checked on 3 Nov 2026
+EPL_SCHEDULE = "https://raw.githubusercontent.com/openfootball/football.json/master/{start}-{end:02d}/en.1.json"
+OPENFOOTBALL_NAMES = {
+    "AFC Bournemouth": "Bournemouth", "Arsenal FC": "Arsenal", "Aston Villa FC": "Aston Villa",
+    "Brentford FC": "Brentford", "Brighton & Hove Albion FC": "Brighton", "Chelsea FC": "Chelsea",
+    "Coventry City FC": "Coventry", "Crystal Palace FC": "Crystal Palace", "Everton FC": "Everton",
+    "Fulham FC": "Fulham", "Hull City AFC": "Hull", "Ipswich Town FC": "Ipswich", "Leeds United FC": "Leeds",
+    "Liverpool FC": "Liverpool", "Manchester City FC": "Man City", "Manchester United FC": "Man United",
+    "Newcastle United FC": "Newcastle", "Nottingham Forest FC": "Nott'm Forest", "Sunderland AFC": "Sunderland",
+    "Tottenham Hotspur FC": "Tottenham",
+}
 
 
-def fetch_epl_fixtures() -> pd.DataFrame:
-    resp = requests.get(EPL_FIXTURES, timeout=30)
-    resp.raise_for_status()
-    df = pd.read_csv(io.StringIO(resp.content.decode("utf-8-sig", errors="replace")))
-    df = df[df.Div == "E0"]
-    dates = pd.to_datetime(df.Date, dayfirst=True)
-    return pd.DataFrame({"league": "EPL", "season": dates.map(_season_of), "date": dates.dt.date,
-                         "home": df.HomeTeam, "away": df.AwayTeam})
+def fetch_epl_fixtures(played: pd.DataFrame) -> pd.DataFrame:
+    """Every EPL match not played yet: openfootball's season schedule, with football-data's dates for the
+    next round when it lists them (those include TV moves)."""
+    season = EPL_SEASONS[-1]
+    start = 2000 + int(season[:2])
+    games = _get(EPL_SCHEDULE.format(start=start, end=(start + 1) % 100)).json()["matches"]
+    unknown = {t for m in games for t in (m["team1"], m["team2"])} - set(OPENFOOTBALL_NAMES)
+    if unknown:
+        raise SystemExit(f"Add these openfootball team names to OPENFOOTBALL_NAMES: {sorted(unknown)}")
+    df = pd.DataFrame({"date": pd.to_datetime([m["date"] for m in games]).date,
+                       "home": [OPENFOOTBALL_NAMES[m["team1"]] for m in games],
+                       "away": [OPENFOOTBALL_NAMES[m["team2"]] for m in games]})
+    done = set(zip(played.home, played.away))  # each pairing is played once per season
+    df = df[[(h, a) not in done for h, a in zip(df.home, df.away)]]
+
+    nxt = pd.read_csv(io.StringIO(_get(EPL_FIXTURES).content.decode("utf-8-sig", errors="replace")))
+    nxt = nxt[nxt.Div == "E0"]
+    exact = {(h, a): pd.to_datetime(d, dayfirst=True).date() for d, h, a in zip(nxt.Date, nxt.HomeTeam, nxt.AwayTeam)}
+    df["date"] = [exact.get((h, a), d) for d, h, a in zip(df.date, df.home, df.away)]
+    return df.assign(league="EPL", season=season)[["league", "season", "date", "home", "away"]].sort_values("date")
 
 
 EGY_RECENT = Path(__file__).with_name("data") / "egypt_results.csv"  # made by fetch_egypt.py
@@ -177,7 +213,8 @@ def run():
     with eng.begin() as conn:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_matches_teams ON matches (home, away, date)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_matches_league ON matches (league, season, date)"))
-    fixtures = [fetch_epl_fixtures()]  # upcoming fixtures, so the app can analyse the next matches
+    epl_now = df[(df.league == "EPL") & (df.season == EPL_SEASONS[-1])]
+    fixtures = [fetch_epl_fixtures(epl_now)]  # upcoming fixtures, so the app can analyse the next matches
     if EGY_KOOORA.exists():
         k = kooora_matches()
         fixtures.append(k[k.status == "FIXTURE"].assign(league="EGY")[["league", "season", "date", "home", "away"]])
@@ -188,6 +225,20 @@ def run():
     for league, part in df.groupby("league"):
         print(f"{league}: {len(part)} matches ({part.date.min()} -> {part.date.max()})")
     print(f"Saved to {DATABASE_URL}")
+
+
+def content_hash() -> str:
+    """Hash of the rows (not the file bytes, which change on every rebuild), so the daily job only commits real changes."""
+    import hashlib
+    h = hashlib.sha256()
+    with engine().connect() as c:
+        for table, order in (("matches", "match_id"), ("fixtures", "league, date, home")):
+            try:
+                for row in c.execute(text(f"SELECT * FROM {table} ORDER BY {order}")):
+                    h.update(repr(tuple(row)).encode())
+            except Exception:  # table missing on a fresh database
+                h.update(table.encode())
+    return h.hexdigest()
 
 
 if __name__ == "__main__":

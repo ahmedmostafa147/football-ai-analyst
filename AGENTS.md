@@ -38,19 +38,25 @@ https://football-ai-analyst-v1.streamlit.app (repo: github.com/ahmedmostafa147/f
 | `evaluate.py` / `improve.py` / `features.py` | Backtests (no leakage), ML experiments, fact-checker hallucination tests |
 | `main.py` | CLI version of the match analyst |
 
-Data sources: EPL results + fixtures from football-data.co.uk (`E0.csv`, `fixtures.csv`); Egyptian current season from
+Data sources: EPL results from football-data.co.uk (`E0.csv`); EPL schedule from openfootball/football.json (public
+domain), with football-data's `fixtures.csv` dates for the next round when listed; Egyptian current season from
 Kooora (Arabic names mapped to English in `pipeline.KOOORA_NAMES`); Egyptian history from footballdatabase.com.
 Do **not** use Understat (robots.txt disallows all). FBref/worldfootball/soccerstats block automated requests.
 
-## Refreshing data (manual for now)
+## Refreshing data (automatic, daily)
+
+`.github/workflows/refresh-data.yml` runs every day at 06:00 Cairo (and from the Actions tab → "Run workflow"):
+`fetch_kooora.py` → `pipeline.py` → commits `football.db` only if the rows changed (`pipeline.content_hash()`).
+Streamlit Cloud redeploys from that push. To do the same by hand:
 
 ```bash
 python fetch_kooora.py     # current Egyptian season + fixtures (~1 min)
 python pipeline.py         # rebuilds football.db (EPL is re-downloaded here)
 git add football.db && git commit -m "Refresh data" && git push   # Streamlit Cloud redeploys from main
 ```
-`football.db` is committed on purpose so the cloud app runs without downloading. `data/` is git-ignored.
-If Kooora shows a new team name, `pipeline.py` stops and asks you to add it to `KOOORA_NAMES`.
+`football.db` is committed on purpose so the cloud app runs without downloading. `data/` is git-ignored except
+`data/egypt_results.csv` (Egyptian history, needed by the Action). If Kooora or openfootball shows a new team name,
+`pipeline.py` stops and asks you to add it to `KOOORA_NAMES` / `OPENFOOTBALL_NAMES`; the Action fails and GitHub emails the owner.
 
 ## Run locally
 

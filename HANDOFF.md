@@ -31,8 +31,8 @@ Plan agreed with him: finish this project → he learns it step by step → upda
 
 1. **Owner understanding.** He said he doesn't understand the project yet. Teach it in 4 short lessons following the
    pipeline (data → retrieval → writer → checker), in Egyptian Arabic, with one interview question after each.
-2. **Automatic data refresh.** Data only updates when someone runs `fetch_kooora.py` + `pipeline.py` and pushes.
-   Proposed: a daily GitHub Action doing exactly that. Not built yet; ask the owner first.
+2. **Automatic data refresh.** Built 2026-11-03: daily GitHub Action (`.github/workflows/refresh-data.yml`).
+   Check the Actions tab if the site looks stale; Kooora blocking GitHub's servers is the most likely failure.
 3. **Player analysis for the current season.** No free, allowed source found. Plan: owner creates a free
    API-Football key; test whether the free plan includes season 2026 before building anything.
 4. **Rotate the Gemini key.** It was pasted into a chat on 2026-10-31; the owner was advised to create a new one.
@@ -44,5 +44,6 @@ Plan agreed with him: finish this project → he learns it step by step → upda
 ## Known limitations
 
 - Egyptian data has goals only (no shots/xG), so Egyptian dashboard metrics are goal-based.
-- EPL fixtures file (`fixtures.csv`) only contains the next round.
+- EPL future dates come from openfootball and show Saturday 15:00 until TV picks are known; football-data's
+  `fixtures.csv` corrects the next round once it lists it.
 - `TeamStrengthModel` ignores promoted teams' history from lower divisions (they start at league average).
